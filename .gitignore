@@ -1,0 +1,26 @@
+# Environment - NEVER commit this
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+venv/
+.venv/
+env/
+
+# Data & Cache
+data/
+*.db
+*.sqlite
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# macOS
+.DS_Store
+
+# Logs
+*.log

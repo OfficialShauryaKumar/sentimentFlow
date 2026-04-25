@@ -15,7 +15,7 @@ vaderSentiment==3.3.2
 
 # Stock & Market Data (real-time price, fundamentals, history)
 yfinance==0.2.40
-pandas==2.2.2
+pandas==3.0.2
 numpy==1.26.4
 
 # Optional: FinBERT (uncomment for better accuracy, requires ~500MB)

@@ -32,20 +32,22 @@ except ImportError:
     _ok = False
     logger.warning("yfinance not installed — market health unavailable.")
 
-_DELAY = 1.0   # seconds between Yahoo Finance calls
+# Throttled yfinance client (avoids 429 rate-limit errors).
+from analysis.yf_client import get_ticker, call_with_retry, is_circuit_open
 
 
 def _fetch(ticker: str) -> Optional[dict]:
     """Fetch quote + recent history for a single ticker."""
-    if not _ok:
+    if not _ok or is_circuit_open():
         return None
     try:
-        time.sleep(_DELAY)
-        t    = yf.Ticker(ticker)
-        fi   = t.fast_info
-        hist = t.history(period="3mo", interval="1d")
+        t = get_ticker(ticker)
+        if t is None:
+            return None  # yfinance disabled or circuit open
+        fi   = call_with_retry(lambda: t.fast_info)
+        hist = call_with_retry(lambda: t.history(period="3mo", interval="1d"))
 
-        if hist.empty:
+        if fi is None or hist is None or hist.empty:
             return None
 
         price      = float(fi.last_price)      if fi.last_price      else None

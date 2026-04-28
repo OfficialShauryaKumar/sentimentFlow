@@ -27,6 +27,9 @@ except ImportError:
     _yf_ok = False
     logger.warning("yfinance not installed — fundamental data unavailable.")
 
+# Throttled yfinance client (avoids 429 rate-limit errors).
+from analysis.yf_client import get_ticker, call_with_retry
+
 
 def fetch_fundamentals(ticker: str) -> Optional[dict]:
     """
@@ -37,8 +40,10 @@ def fetch_fundamentals(ticker: str) -> Optional[dict]:
         return None
 
     try:
-        t    = yf.Ticker(ticker)
-        info = t.info
+        t = get_ticker(ticker)
+        if t is None:
+            return None  # yfinance disabled or circuit breaker open
+        info = call_with_retry(lambda: t.info)
         if not info or "symbol" not in info:
             return None
 
@@ -87,7 +92,7 @@ def fetch_fundamentals(ticker: str) -> Optional[dict]:
         # ── Earnings calendar ──────────────────────────────────────────────
         next_earnings = None
         try:
-            cal = t.calendar
+            cal = call_with_retry(lambda: t.calendar)
             if cal is not None and not cal.empty:
                 dates = cal.get("Earnings Date")
                 if dates is not None and len(dates) > 0:
@@ -98,7 +103,7 @@ def fetch_fundamentals(ticker: str) -> Optional[dict]:
         # ── Recent earnings surprises ──────────────────────────────────────
         surprises = []
         try:
-            hist = t.earnings_history
+            hist = call_with_retry(lambda: t.earnings_history)
             if hist is not None and not hist.empty:
                 for _, row in hist.tail(4).iterrows():
                     if "surprisePercent" in row and row["surprisePercent"] is not None:

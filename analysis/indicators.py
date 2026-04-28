@@ -27,6 +27,9 @@ except ImportError:
     _yf_ok = False
     logger.warning("yfinance/pandas not installed — technical indicators unavailable.")
 
+# Throttled yfinance client (avoids 429 rate-limit errors).
+from analysis.yf_client import get_ticker, call_with_retry
+
 
 # ─── Data fetch ──────────────────────────────────────────────────────────────
 
@@ -35,9 +38,11 @@ def fetch_history(ticker: str, period: str = "6mo", interval: str = "1d") -> Opt
     if not _yf_ok:
         return None
     try:
-        t    = yf.Ticker(ticker)
-        hist = t.history(period=period, interval=interval)
-        if hist.empty or len(hist) < 20:
+        t = get_ticker(ticker)
+        if t is None:
+            return None  # yfinance disabled or circuit breaker open
+        hist = call_with_retry(lambda: t.history(period=period, interval=interval))
+        if hist is None or hist.empty or len(hist) < 20:
             return None
         return hist
     except Exception as e:
@@ -50,18 +55,36 @@ def fetch_quote(ticker: str) -> Optional[dict]:
     if not _yf_ok:
         return None
     try:
-        t    = yf.Ticker(ticker)
-        fi   = t.fast_info
+        t = get_ticker(ticker)
+        if t is None:
+            return None  # yfinance disabled or circuit breaker open
+        # fast_info is lazy — touching one field forces the network call;
+        # wrap it so we retry on 429.
+        fi = call_with_retry(lambda: t.fast_info)
+        if fi is None:
+            return None
+        # Force eager fetch of the fields we need (also retried).
+        snapshot = call_with_retry(lambda: {
+            "last_price":                 fi.last_price,
+            "previous_close":             fi.previous_close,
+            "three_month_average_volume": fi.three_month_average_volume,
+            "year_high":                  fi.year_high,
+            "year_low":                   fi.year_low,
+            "market_cap":                 fi.market_cap,
+            "currency":                   fi.currency,
+        })
+        last  = snapshot["last_price"]
+        prev  = snapshot["previous_close"]
         return {
-            "price":          round(float(fi.last_price), 2)    if fi.last_price    else None,
-            "prev_close":     round(float(fi.previous_close), 2) if fi.previous_close else None,
-            "change_pct":     round((fi.last_price - fi.previous_close) / fi.previous_close * 100, 2)
-                              if fi.last_price and fi.previous_close else None,
-            "volume":         int(fi.three_month_average_volume) if fi.three_month_average_volume else None,
-            "week52_high":    round(float(fi.year_high), 2)  if fi.year_high  else None,
-            "week52_low":     round(float(fi.year_low), 2)   if fi.year_low   else None,
-            "market_cap":     int(fi.market_cap)             if fi.market_cap else None,
-            "currency":       fi.currency or "USD",
+            "price":          round(float(last), 2)  if last else None,
+            "prev_close":     round(float(prev), 2)  if prev else None,
+            "change_pct":     round((last - prev) / prev * 100, 2)
+                              if last and prev else None,
+            "volume":         int(snapshot["three_month_average_volume"]) if snapshot["three_month_average_volume"] else None,
+            "week52_high":    round(float(snapshot["year_high"]), 2)  if snapshot["year_high"]  else None,
+            "week52_low":     round(float(snapshot["year_low"]), 2)   if snapshot["year_low"]   else None,
+            "market_cap":     int(snapshot["market_cap"])             if snapshot["market_cap"] else None,
+            "currency":       snapshot["currency"] or "USD",
         }
     except Exception as e:
         logger.debug(f"Quote fetch failed for {ticker}: {e}")

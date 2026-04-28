@@ -1,6 +1,12 @@
 """
 analysis/recommender.py — Master pipeline
 Sentiment → Indicators → Fundamentals → Short/Long predictions
+
+PATCHED (always-HOLD fix):
+  Added apply_ranked_signals() which reranks STRONG BUY / BUY / HOLD / SELL
+  / STRONG SELL based on percentile rank across the watchlist instead of
+  absolute thresholds. This guarantees we always surface conviction picks
+  even when sentiment composites are clustered tightly around 0.
 """
 
 import logging
@@ -9,7 +15,12 @@ import config
 from analysis.sentiment import score_sentiment, classify_sentiment
 from analysis.indicators import compute_all as compute_technicals
 from analysis.fundamentals import fetch_fundamentals
-from analysis.timeframe import short_term_prediction, long_term_prediction
+from analysis.timeframe import (
+    short_term_prediction,
+    long_term_prediction,
+    action_label,
+    options_for_signal,
+)
 
 logger = logging.getLogger("recommender")
 
@@ -52,7 +63,8 @@ def aggregate_by_ticker(mentions: list[dict]) -> dict:
             0.6 * avg_w + 0.4 * (avg_sent * min(total_tr / 5, 1.0)), 4
         )
 
-        # legacy signal for top-level card
+        # legacy signal — REPLACED by apply_ranked_signals() below
+        # but kept here as a placeholder so the schema is consistent
         if composite >= config.SENTIMENT_BUY:
             signal = "BUY"
         elif composite <= config.SENTIMENT_AVOID:
@@ -92,6 +104,82 @@ def aggregate_by_ticker(mentions: list[dict]) -> dict:
     return aggregated
 
 
+# ─── NEW: relative-ranking signal assignment ──────────────────────────────────
+
+def apply_ranked_signals(
+    results: list[dict],
+    top_pct: float = 0.10,
+    buy_pct: float = 0.30,
+    sell_pct: float = 0.70,
+    bottom_pct: float = 0.90,
+) -> None:
+    """
+    Reassign STRONG BUY / BUY / HOLD / SELL / STRONG SELL based on percentile
+    rank of the composite score across the watchlist, instead of absolute
+    thresholds. Mutates `results` in place.
+
+    Default cutoffs (rank 0 = highest composite):
+        rank percentile  <  10%   →  STRONG BUY
+        rank percentile  <  30%   →  BUY
+        rank percentile  in 30–70% →  HOLD
+        rank percentile  >  70%   →  SELL
+        rank percentile  >  90%   →  STRONG SELL
+
+    Why: composites cluster near 0 because most financial news is neutral and
+    the traction-weighting in aggregate_by_ticker further compresses scores.
+    Absolute-threshold logic resolves nearly everything to HOLD. Ranking
+    fixes the symptom directly and matches how real quant equity strategies
+    operate (top vs bottom decile, not absolute cutoffs).
+    """
+    if not results or len(results) < 5:
+        return  # not enough cross-section to rank meaningfully
+
+    for tf in ("short_term", "long_term"):
+        scored = [(r, (r.get(tf) or {}).get("composite_score")) for r in results]
+        scored = [(r, s) for r, s in scored if s is not None]
+        if len(scored) < 5:
+            continue
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        n = len(scored)
+
+        for rank, (r, _score) in enumerate(scored):
+            pct = rank / n
+            if pct < top_pct:
+                new_signal = "STRONG BUY"
+            elif pct < buy_pct:
+                new_signal = "BUY"
+            elif pct < sell_pct:
+                new_signal = "HOLD"
+            elif pct < bottom_pct:
+                new_signal = "SELL"
+            else:
+                new_signal = "STRONG SELL"
+
+            r[tf]["signal"] = new_signal
+            tf_short = tf.split("_")[0]
+            tech = r.get("technicals")
+            squeeze = (tech or {}).get("squeeze", False) if tech else False
+            try:
+                r[tf]["action"] = action_label(new_signal, tf_short, tech)
+                r[tf]["options_plays"] = options_for_signal(new_signal, tf_short, squeeze)
+            except Exception as e:
+                logger.warning(f"could not refresh action/options after rerank: {e}")
+
+    # Also refresh top-level legacy signal based on short_term ranking
+    sig_map = {
+        "STRONG BUY": "BUY", "BUY": "BUY",
+        "HOLD": "NEUTRAL",
+        "SELL": "AVOID", "STRONG SELL": "AVOID",
+    }
+    for r in results:
+        st_sig = (r.get("short_term") or {}).get("signal")
+        if st_sig:
+            r["signal"] = sig_map.get(st_sig, r.get("signal", "NEUTRAL"))
+
+
+# ─── Main pipeline ────────────────────────────────────────────────────────────
+
 def build_recommendations(mentions: list[dict]) -> list[dict]:
     """
     Full pipeline:
@@ -99,7 +187,8 @@ def build_recommendations(mentions: list[dict]) -> list[dict]:
       2. Aggregate by ticker
       3. For each ticker: fetch technical indicators + fundamentals
       4. Build short-term AND long-term predictions
-      5. Sort and return
+      5. Apply relative-ranking signal assignment (NEW)
+      6. Sort and return
     """
     if not mentions:
         logger.warning("No mentions to process.")
@@ -167,10 +256,12 @@ def build_recommendations(mentions: list[dict]) -> list[dict]:
 
         results.append(data)
 
+    # ── NEW: rerank signals by percentile across the watchlist ──────────────
+    apply_ranked_signals(results)
+
     # Sort: strong buy first, then buy, neutral, sell, strong sell
     def sort_key(r):
         st = r.get("short_term") or {}
-        lt = r.get("long_term")  or {}
         sig_order = {"STRONG BUY": 0, "BUY": 1, "HOLD": 2, "SELL": 3, "STRONG SELL": 4}
         st_sig = sig_order.get(st.get("signal", "HOLD"), 2)
         return (st_sig, -(r["composite_score"]))

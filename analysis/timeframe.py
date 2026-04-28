@@ -146,7 +146,7 @@ _OPTIONS_INFO = {
 }
 
 
-def _options_for_signal(signal: str, timeframe: str, squeeze: bool = False) -> list[dict]:
+def options_for_signal(signal: str, timeframe: str, squeeze: bool = False) -> list[dict]:
     """Return relevant options plays with their full explanations."""
     plays = []
 
@@ -245,10 +245,10 @@ def short_term_prediction(
 
     # ── Options ───────────────────────────────────────────────────────────
     squeeze = technicals.get("squeeze", False) if technicals else False
-    options = _options_for_signal(signal, "short", squeeze)
+    options = options_for_signal(signal, "short", squeeze)
 
     # ── Action label ──────────────────────────────────────────────────────
-    action = _action_label(signal, "short", technicals)
+    action = action_label(signal, "short", technicals)
 
     return {
         "timeframe":      "short",
@@ -355,10 +355,10 @@ def long_term_prediction(
     rationale = _long_rationale(signal, sentiment_score, technicals, fundamentals, composite)
 
     # ── Options ───────────────────────────────────────────────────────────
-    options = _options_for_signal(signal, "long")
+    options = options_for_signal(signal, "long")
 
     # ── Action label ──────────────────────────────────────────────────────
-    action = _action_label(signal, "long", technicals)
+    action = action_label(signal, "long", technicals)
 
     # ── Analyst target ────────────────────────────────────────────────────
     target_mean = fundamentals.get("target_mean")     if fundamentals else None
@@ -593,7 +593,7 @@ def _long_rationale(signal: str, sentiment: float, tech: Optional[dict],
 
 # ─── Action label ─────────────────────────────────────────────────────────────
 
-def _action_label(signal: str, timeframe: str, tech: Optional[dict]) -> str:
+def action_label(signal: str, timeframe: str, tech: Optional[dict]) -> str:
     rsi_v = tech.get("rsi", 50) if tech else 50
     squeeze = tech.get("squeeze", False) if tech else False
 

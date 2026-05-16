@@ -2,7 +2,9 @@
 app.py — Flask REST API for SentimentFlow
 Includes persistent portfolio management endpoints.
 """
+import csv
 import logging
+import os
 from datetime import datetime, timezone
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -22,6 +24,63 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("app")
 
+# Path where daily sentiment snapshots accumulate. Each row = one (date, ticker)
+# pair. After 60–90 trading days this file is the input for backtest/backtest.py.
+HISTORY_PATH   = os.path.join("data", "sentiment_history.csv")
+HISTORY_HEADER = ["date", "ticker", "sentiment_score", "article_count",
+                  "bullish_pct", "bearish_pct", "engine"]
+
+
+def _archive_snapshot(recs: list[dict]) -> None:
+    """Append today's per-ticker aggregated sentiment to the history CSV.
+
+    Deduplicates by (date, ticker) so multiple dashboard calls per day only
+    produce one row per ticker per day. Quietly no-ops on errors so a write
+    failure can never break the dashboard.
+    """
+    if not recs:
+        return
+    try:
+        today  = datetime.now(timezone.utc).date().isoformat()
+        engine = "finbert" if config.USE_FINBERT else "vader"
+        os.makedirs(os.path.dirname(HISTORY_PATH), exist_ok=True)
+
+        # Load keys already written so we don't re-archive today.
+        existing: set[tuple[str, str]] = set()
+        if os.path.exists(HISTORY_PATH):
+            with open(HISTORY_PATH, newline="") as f:
+                for row in csv.DictReader(f):
+                    existing.add((row["date"], row["ticker"]))
+
+        new_rows = []
+        for r in recs:
+            key = (today, r["ticker"])
+            if key in existing:
+                continue
+            new_rows.append([
+                today,
+                r["ticker"],
+                r.get("composite_score", 0.0),
+                r.get("mention_count", 0),
+                r.get("bullish_pct", 0.0),
+                r.get("bearish_pct", 0.0),
+                engine,
+            ])
+
+        if not new_rows:
+            return
+
+        write_header = not os.path.exists(HISTORY_PATH)
+        with open(HISTORY_PATH, "a", newline="") as f:
+            w = csv.writer(f)
+            if write_header:
+                w.writerow(HISTORY_HEADER)
+            w.writerows(new_rows)
+        logger.info(f"Archived {len(new_rows)} sentiment rows for {today}")
+    except Exception as e:
+        logger.warning(f"Archive snapshot failed (non-fatal): {e}")
+
+
 app = Flask(__name__, static_folder="dashboard")
 CORS(app)
 init_db()
@@ -34,6 +93,7 @@ def _run_analysis() -> dict:
     all_m  = reddit + news
     logger.info(f"Total mentions: {len(all_m)}")
     recs   = build_recommendations(all_m)
+    _archive_snapshot(recs)
     return {
         "recommendations": recs,
         "total_mentions":  len(all_m),

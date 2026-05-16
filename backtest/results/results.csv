@@ -1,0 +1,10 @@
+metric,value
+mean_IC,0.05525059420869828
+IR,0.23009730773494608
+hit_rate (|sent|>0.1),0.6086956521739131
+long_short_sharpe_gross,2.8422857815457916
+long_short_sharpe_net,1.397827731080671
+long_short_total_return_net,0.0276485992215032
+long_short_max_drawdown_net,-0.03776457272773359
+n_observations,420.0
+n_eval_days,30.0

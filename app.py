@@ -80,6 +80,13 @@ def _archive_snapshot(recs: list[dict]) -> None:
     except Exception as e:
         logger.warning(f"Archive snapshot failed (non-fatal): {e}")
 
+    # Also push to Google Sheets if configured (best-effort, never raises).
+    try:
+        from sheets_sync import push_snapshot
+        push_snapshot(recs, engine=engine)
+    except Exception as e:
+        logger.warning(f"Sheets sync failed (non-fatal): {e}")
+
 
 app = Flask(__name__, static_folder="dashboard")
 CORS(app)

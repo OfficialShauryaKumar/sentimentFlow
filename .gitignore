@@ -1,6 +1,10 @@
 # Environment - NEVER commit this
 .env
 
+# Google service account credentials - NEVER commit
+credentials/
+*google_service_account*.json
+
 # Python
 __pycache__/
 *.py[cod]

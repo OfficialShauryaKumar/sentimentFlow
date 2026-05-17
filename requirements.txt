@@ -18,6 +18,10 @@ yfinance==0.2.40
 pandas==3.0.2
 numpy>=2.3.3
 
+# Google Sheets sync (optional — daily archive auto-pushes to a Sheet)
+gspread==6.1.2
+google-auth==2.34.0
+
 # Optional: FinBERT (uncomment for better accuracy, requires ~500MB)
 # transformers==4.42.4
 # torch==2.3.1

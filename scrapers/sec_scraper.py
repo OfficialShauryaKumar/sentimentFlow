@@ -11,7 +11,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 
 import config
-from analysis.sentiment import score_text
+from analysis.sentiment import score_sentiment, classify_sentiment
 
 logger = logging.getLogger("sec_scraper")
 
@@ -142,7 +142,8 @@ def scrape_sec_filings(tickers: list[str] = None) -> list[dict]:
             text = _fetch_filing_text(cik, accession.replace("-", ""), accession) if primary_doc else ""
 
             # Run sentiment on the filing text
-            sentiment = score_text(text) if text else {"score": 0.0, "label": "NEUTRAL"}
+            sent_score = score_sentiment(text) if text else 0.0
+            sentiment  = {"score": sent_score, "label": classify_sentiment(sent_score)}
 
             filing = {
                 "ticker":          ticker,

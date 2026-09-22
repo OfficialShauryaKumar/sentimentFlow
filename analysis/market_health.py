@@ -33,28 +33,65 @@ except ImportError:
     logger.warning("yfinance not installed — market health unavailable.")
 
 # Throttled yfinance client (avoids 429 rate-limit errors).
-from analysis.yf_client import get_ticker, call_with_retry, is_circuit_open
+from analysis.yf_client import reset_circuit
+
+# User-Agent that looks like a real browser — reduces Yahoo rate-limiting
+_YF_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+}
 
 
 def _fetch(ticker: str) -> Optional[dict]:
-    """Fetch quote + recent history for a single ticker."""
-    if not _ok or is_circuit_open():
+    """Fetch quote + recent history for a single ticker using yf.download().
+
+    Uses yf.download() instead of Ticker.fast_info because:
+      - It hits a different Yahoo endpoint (chart API) that is less aggressively
+        rate-limited on cloud IPs.
+      - It works after market hours (returns last close price).
+      - Avoids the shared circuit breaker that stock-ticker fetches can trip.
+    """
+    if not _ok:
         return None
     try:
-        t = get_ticker(ticker)
-        if t is None:
-            return None  # yfinance disabled or circuit open
-        fi   = call_with_retry(lambda: t.fast_info)
-        hist = call_with_retry(lambda: t.history(period="3mo", interval="1d"))
+        import requests as _req
+        session = _req.Session()
+        session.headers.update(_YF_HEADERS)
 
-        if fi is None or hist is None or hist.empty:
+        hist = yf.download(
+            ticker,
+            period="3mo",
+            interval="1d",
+            progress=False,
+            auto_adjust=True,
+            session=session,
+        )
+
+        if hist is None or hist.empty:
             return None
 
-        price      = float(fi.last_price)      if fi.last_price      else None
-        prev_close = float(fi.previous_close)  if fi.previous_close  else None
-        change_pct = round((price - prev_close) / prev_close * 100, 2) if price and prev_close else 0
+        # yf.download returns MultiIndex columns when downloading a single
+        # ticker in newer versions — flatten if needed.
+        if isinstance(hist.columns, type(hist.columns)) and hasattr(hist.columns, "levels"):
+            try:
+                hist.columns = hist.columns.get_level_values(0)
+            except Exception:
+                pass
 
-        close = hist["Close"]
+        if "Close" not in hist.columns:
+            return None
+
+        close = hist["Close"].dropna()
+        if close.empty:
+            return None
+
+        # Use last available close (works 24/7, not just during trading hours)
+        price     = float(close.iloc[-1])
+        prev_close = float(close.iloc[-2]) if len(close) >= 2 else price
+        change_pct = round((price - prev_close) / prev_close * 100, 2) if prev_close else 0
 
         # 1-day, 5-day, 20-day, 50-day returns
         def pct_return(days):
@@ -101,6 +138,9 @@ def fetch_market_health() -> dict:
     Fetch all market indicators and compute overall health score,
     trajectory, regime, and plain-English reasoning.
     """
+    # Reset the circuit breaker so stock-ticker failures earlier in the run
+    # don't permanently block market health fetches.
+    reset_circuit()
     logger.info("Fetching market health indicators…")
 
     # ── Core indices ──────────────────────────────────────────────────────────

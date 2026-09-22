@@ -46,7 +46,7 @@ SKIP_YFINANCE = os.getenv("SKIP_YFINANCE", "false").lower() == "true"
 # Circuit breaker: after this many consecutive rate-limit errors in a single
 # run, stop trying yfinance entirely. Saves you from the ~10-minute hang
 # yfinance's own internal retry loop produces when Yahoo blocks your IP.
-CIRCUIT_BREAKER_THRESHOLD = 2
+CIRCUIT_BREAKER_THRESHOLD = 5
 
 # Retries removed: yfinance has its own internal retry that already wastes
 # ~8s per failure. Adding our own retries on top just compounds the wait.
@@ -109,6 +109,18 @@ def _trip_circuit_if_needed() -> None:
 
 def is_circuit_open() -> bool:
     return _circuit_open or SKIP_YFINANCE
+
+
+def reset_circuit() -> None:
+    """Reset the circuit breaker so yfinance calls can be retried.
+    Call this before a fresh market-health fetch so earlier stock-ticker
+    failures don't permanently block the market indices endpoint."""
+    global _circuit_open, _failure_count
+    with _circuit_lock:
+        if _circuit_open or _failure_count > 0:
+            logger.info("yfinance circuit breaker RESET — retrying market data.")
+        _circuit_open = False
+        _failure_count = 0
 
 
 # ─── Public API ──────────────────────────────────────────────────────────────

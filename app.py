@@ -287,6 +287,32 @@ def health():
                     "cache_ttl_minutes": config.CACHE_TTL_MINUTES})
 
 
+@app.route("/api/paper/auto-run", methods=["GET", "POST"])
+def paper_auto_run():
+    """
+    Combined endpoint: refresh signals + run trading cycle in one call.
+    Designed for cron-job.org or any external scheduler.
+    Accepts GET or POST so it works with simple HTTP pingers too.
+    """
+    try:
+        cache_invalidate("analysis_v2")
+        data = _run_analysis()
+        cache_set("analysis_v2", data)
+        result = pt.run_paper_trading_cycle(data.get("recommendations", []))
+        account = pt.get_account()
+        return jsonify({
+            "ok": True,
+            "auto_executed":        len(result.get("auto_executed", [])),
+            "queued_for_approval":  len(result.get("queued_for_approval", [])),
+            "cash":                 account["cash"],
+            "total_value":          account["total_value"],
+            "total_return_pct":     account["total_return_pct"],
+        })
+    except Exception as e:
+        logger.error(f"Auto-run failed: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ── Paper Trading ─────────────────────────────────────────────────────────────
 
 @app.route("/api/paper/account", methods=["GET"])

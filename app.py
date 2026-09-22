@@ -1,6 +1,6 @@
 """
 app.py — Flask REST API for SentimentFlow
-Includes persistent portfolio management endpoints.
+Includes persistent portfolio management, paper trading, and SEC filings endpoints.
 """
 import csv
 import logging
@@ -15,9 +15,12 @@ from database import (
     init_db, cache_get, cache_set, cache_invalidate,
     portfolio_get_all, portfolio_upsert, portfolio_get_one, portfolio_delete,
 )
+from database.db import sec_upsert_filing, sec_get_filings
 from scrapers import scrape_reddit, scrape_news
+from scrapers.sec_scraper import scrape_sec_filings
 from analysis import build_recommendations
 from analysis.market_health import fetch_market_health
+import paper_trading as pt
 from analysis.portfolio import analyze_portfolio
 
 logging.basicConfig(level=logging.INFO,
@@ -282,6 +285,125 @@ def get_market_health():
 def health():
     return jsonify({"ok": True, "status": "running",
                     "cache_ttl_minutes": config.CACHE_TTL_MINUTES})
+
+
+# ── Paper Trading ─────────────────────────────────────────────────────────────
+
+@app.route("/api/paper/account", methods=["GET"])
+def paper_account():
+    """GET account summary: cash, positions value, total return, P&L."""
+    return jsonify({"ok": True, "account": pt.get_account()})
+
+
+@app.route("/api/paper/positions", methods=["GET"])
+def paper_positions():
+    """GET all open paper positions with live prices."""
+    return jsonify({"ok": True, "positions": pt.get_positions()})
+
+
+@app.route("/api/paper/trades", methods=["GET"])
+def paper_trades():
+    """GET executed trade history."""
+    limit = int(request.args.get("limit", 50))
+    return jsonify({"ok": True, "trades": pt.get_trades(limit)})
+
+
+@app.route("/api/paper/pending", methods=["GET"])
+def paper_pending():
+    """GET trades awaiting manual approval."""
+    return jsonify({"ok": True, "pending": pt.get_pending_trades()})
+
+
+@app.route("/api/paper/approve/<int:trade_id>", methods=["POST"])
+def paper_approve(trade_id: int):
+    """Approve a queued trade and execute it at current market price."""
+    result = pt.approve_trade(trade_id)
+    return jsonify(result), 200 if result.get("ok") else 400
+
+
+@app.route("/api/paper/reject/<int:trade_id>", methods=["POST"])
+def paper_reject(trade_id: int):
+    """Reject a queued trade."""
+    result = pt.reject_trade(trade_id)
+    return jsonify(result), 200 if result.get("ok") else 400
+
+
+@app.route("/api/paper/close/<ticker>", methods=["POST"])
+def paper_close(ticker: str):
+    """Manually close an open position at market price."""
+    result = pt.close_position(ticker.upper())
+    return jsonify(result), 200 if result.get("ok") else 400
+
+
+@app.route("/api/paper/run", methods=["POST"])
+def paper_run():
+    """
+    Run a full paper trading cycle against current sentiment signals.
+    Auto-executes high-conviction (>=4★), queues medium-conviction (3★).
+    """
+    # Get latest recommendations (use cache if available)
+    data = cache_get("analysis_v2")
+    if data is None:
+        data = _run_analysis()
+        cache_set("analysis_v2", data)
+
+    result = pt.run_paper_trading_cycle(data.get("recommendations", []))
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/paper/reset", methods=["POST"])
+def paper_reset():
+    """Reset the paper account to $100,000. Clears all trades and positions."""
+    result = pt.reset_account()
+    return jsonify(result)
+
+
+# ── SEC Filings ───────────────────────────────────────────────────────────────
+
+@app.route("/api/sec/filings", methods=["GET"])
+def sec_filings():
+    """
+    GET /api/sec/filings?ticker=AAPL&form=8-K&limit=20
+    Returns stored SEC filings from the database.
+    """
+    ticker    = request.args.get("ticker", "").upper() or None
+    form_type = request.args.get("form", "").upper() or None
+    limit     = int(request.args.get("limit", 50))
+    filings   = sec_get_filings(ticker=ticker, form_type=form_type, limit=limit)
+    return jsonify({"ok": True, "filings": filings, "count": len(filings)})
+
+
+@app.route("/api/sec/fetch", methods=["POST"])
+def sec_fetch():
+    """
+    POST /api/sec/fetch
+    Body (optional): { "tickers": ["AAPL", "MSFT"] }
+    Scrapes EDGAR for recent 8-K, 10-K, 10-Q filings and stores them.
+    Uses the full watchlist if no tickers provided.
+    """
+    body    = request.get_json(silent=True) or {}
+    tickers = body.get("tickers") or config.WATCHLIST
+
+    logger.info(f"SEC fetch triggered for {len(tickers)} tickers.")
+    try:
+        filings = scrape_sec_filings(tickers)
+        for f in filings:
+            sec_upsert_filing(f)
+        return jsonify({
+            "ok":      True,
+            "fetched": len(filings),
+            "tickers": tickers,
+        })
+    except Exception as e:
+        logger.error(f"SEC fetch failed: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sec/filings/<ticker>", methods=["GET"])
+def sec_filings_for_ticker(ticker: str):
+    """GET all stored SEC filings for a specific ticker."""
+    filings = sec_get_filings(ticker=ticker.upper())
+    return jsonify({"ok": True, "ticker": ticker.upper(), "filings": filings, "count": len(filings)})
 
 
 if __name__ == "__main__":

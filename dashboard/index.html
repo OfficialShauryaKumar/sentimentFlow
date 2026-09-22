@@ -317,6 +317,7 @@ main{max-width:1500px;margin:0 auto;padding:18px 16px}
     <button class="nav-tab active" id="tab-signals" onclick="switchView('signals')">Signals <span class="nbadge" id="nb-signals">0</span></button>
     <button class="nav-tab" id="tab-portfolio" onclick="switchView('portfolio')">Portfolio<span class="nbadge" id="nb-portfolio">0</span></button>
     <button class="nav-tab" id="tab-market" onclick="switchView('market')">Market Health</button>
+    <button class="nav-tab" id="tab-paper" onclick="switchView('paper')">📈 Paper Trading <span class="nbadge" id="nb-pending" style="background:rgba(255,170,0,.4)">0</span></button>
   </div>
 
   <div class="hright">
@@ -451,6 +452,91 @@ main{max-width:1500px;margin:0 auto;padding:18px 16px}
       </div>
 
     </div>
+  </div>
+
+  <!-- ── PAPER TRADING VIEW ── -->
+  <div class="view" id="view-paper">
+
+    <!-- Account summary bar -->
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:16px" id="ptStats">
+      <div class="sbox"><div class="sl">Cash</div><div class="sv" id="pt-cash">—</div></div>
+      <div class="sbox"><div class="sl">Positions Value</div><div class="sv" id="pt-posval">—</div></div>
+      <div class="sbox"><div class="sl">Total Value</div><div class="sv" id="pt-total">—</div></div>
+      <div class="sbox"><div class="sl">Total Return</div><div class="sv" id="pt-ret">—</div></div>
+      <div class="sbox"><div class="sl">Realized P&L</div><div class="sv" id="pt-rpnl">—</div></div>
+      <div class="sbox"><div class="sl">Unrealized P&L</div><div class="sv" id="pt-upnl">—</div></div>
+    </div>
+
+    <!-- Action buttons -->
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+      <button class="rfbtn" onclick="ptRunCycle()" id="ptRunBtn">▶ Run Trading Cycle</button>
+      <button class="rfbtn" onclick="ptFetchSEC()" id="ptSECBtn" style="background:var(--s2);border:1px solid var(--b2);color:var(--t2)">📄 Fetch SEC Filings</button>
+      <button class="rfbtn" onclick="ptLoadAll()" style="background:var(--s2);border:1px solid var(--b2);color:var(--t2)">↺ Refresh</button>
+      <button class="rfbtn" onclick="ptReset()" style="background:rgba(255,56,96,.12);border:1px solid rgba(255,56,96,.3);color:var(--sell);margin-left:auto">⚠ Reset Account</button>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
+
+      <!-- Open Positions -->
+      <div style="background:var(--s1);border:1px solid var(--b1);border-radius:10px;overflow:hidden">
+        <div style="padding:14px 16px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:13px;font-weight:500">Open Positions</div>
+            <div style="font-size:11px;color:var(--t3);margin-top:2px">Current paper holdings</div>
+          </div>
+          <span id="pt-pos-count" style="font-family:var(--mono);font-size:11px;color:var(--t3)">0 positions</span>
+        </div>
+        <div id="pt-positions" style="min-height:80px">
+          <div style="padding:32px;text-align:center;color:var(--t3);font-size:12px">No open positions yet.<br>Click "Run Trading Cycle" to start.</div>
+        </div>
+      </div>
+
+      <!-- Pending Approvals -->
+      <div style="background:var(--s1);border:1px solid var(--b1);border-radius:10px;overflow:hidden">
+        <div style="padding:14px 16px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:13px;font-weight:500">Pending Approvals</div>
+            <div style="font-size:11px;color:var(--t3);margin-top:2px">Medium-confidence signals awaiting your OK</div>
+          </div>
+          <span id="pt-pend-count" style="font-family:var(--mono);font-size:11px;color:var(--hold)">0 pending</span>
+        </div>
+        <div id="pt-pending" style="min-height:80px">
+          <div style="padding:32px;text-align:center;color:var(--t3);font-size:12px">No pending trades.</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Trade History -->
+    <div style="background:var(--s1);border:1px solid var(--b1);border-radius:10px;overflow:hidden;margin-bottom:16px">
+      <div style="padding:14px 16px;border-bottom:1px solid var(--b1)">
+        <div style="font-size:13px;font-weight:500">Trade History</div>
+        <div style="font-size:11px;color:var(--t3);margin-top:2px">All executed trades</div>
+      </div>
+      <div id="pt-trades" style="min-height:60px">
+        <div style="padding:32px;text-align:center;color:var(--t3);font-size:12px">No trades yet.</div>
+      </div>
+    </div>
+
+    <!-- SEC Filings -->
+    <div style="background:var(--s1);border:1px solid var(--b1);border-radius:10px;overflow:hidden">
+      <div style="padding:14px 16px;border-bottom:1px solid var(--b1);display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-size:13px;font-weight:500">SEC Filings</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:2px">Earnings reports, 10-K, 10-Q with sentiment</div>
+        </div>
+        <select id="pt-sec-filter" style="background:var(--s2);border:1px solid var(--b2);color:var(--t1);border-radius:4px;padding:4px 8px;font-size:11px" onchange="ptLoadSEC()">
+          <option value="">All filings</option>
+          <option value="8-K">8-K (Earnings)</option>
+          <option value="10-K">10-K (Annual)</option>
+          <option value="10-Q">10-Q (Quarterly)</option>
+        </select>
+      </div>
+      <div id="pt-sec" style="min-height:60px">
+        <div style="padding:32px;text-align:center;color:var(--t3);font-size:12px">Click "Fetch SEC Filings" to load earnings reports and filings for your watchlist.</div>
+      </div>
+    </div>
+
   </div>
 
 </main>
@@ -789,12 +875,205 @@ function posCard(pos){
 }
 
 function switchView(v){
-  ['signals','portfolio','market'].forEach(x=>{
+  ['signals','portfolio','market','paper'].forEach(x=>{
     document.getElementById('view-'+x).classList.toggle('active',x===v);
     document.getElementById('tab-'+x)?.classList.toggle('active',x===v);
   });
   if(v==='portfolio') loadHoldings();
   if(v==='market') loadMarketHealth();
+  if(v==='paper') ptLoadAll();
+}
+
+/* ── PAPER TRADING ── */
+function fmt$(n){return n==null?'—':'$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function fmtPct(n){if(n==null)return'—';const s=n>=0?'+':'';return s+Number(n).toFixed(2)+'%';}
+function pnlColor(n){return n>0?'var(--buy)':n<0?'var(--sell)':'var(--t2)';}
+
+async function ptLoadAll(){
+  try{
+    const [acc,pos,trades,pend]=await Promise.all([
+      fetch(`${API}/api/paper/account`).then(r=>r.json()),
+      fetch(`${API}/api/paper/positions`).then(r=>r.json()),
+      fetch(`${API}/api/paper/trades?limit=30`).then(r=>r.json()),
+      fetch(`${API}/api/paper/pending`).then(r=>r.json()),
+    ]);
+    if(acc.ok) ptRenderAccount(acc.account);
+    if(pos.ok) ptRenderPositions(pos.positions);
+    if(trades.ok) ptRenderTrades(trades.trades);
+    if(pend.ok) ptRenderPending(pend.pending);
+    ptLoadSEC();
+  }catch(e){console.error('Paper trading load error',e);}
+}
+
+function ptRenderAccount(a){
+  document.getElementById('pt-cash').textContent=fmt$(a.cash);
+  document.getElementById('pt-posval').textContent=fmt$(a.positions_value);
+  document.getElementById('pt-total').textContent=fmt$(a.total_value);
+  const ret=document.getElementById('pt-ret');
+  ret.textContent=fmtPct(a.total_return_pct);
+  ret.style.color=pnlColor(a.total_return_pct);
+  const rp=document.getElementById('pt-rpnl');
+  rp.textContent=fmt$(a.realized_pnl);
+  rp.style.color=pnlColor(a.realized_pnl);
+  const up=document.getElementById('pt-upnl');
+  up.textContent=fmt$(a.unrealized_pnl);
+  up.style.color=pnlColor(a.unrealized_pnl);
+}
+
+function ptRenderPositions(positions){
+  const el=document.getElementById('pt-positions');
+  document.getElementById('pt-pos-count').textContent=positions.length+' position'+(positions.length===1?'':'s');
+  if(!positions.length){el.innerHTML='<div style="padding:32px;text-align:center;color:var(--t3);font-size:12px">No open positions yet.</div>';return;}
+  el.innerHTML=`
+    <div style="display:grid;grid-template-columns:60px 60px 80px 80px 80px 70px auto;gap:0;font-size:9px;color:var(--t3);font-family:var(--mono);text-transform:uppercase;padding:6px 14px;border-bottom:1px solid var(--b1)">
+      <span>Ticker</span><span>Shares</span><span>Avg Cost</span><span>Price</span><span>Value</span><span>P&L</span><span></span>
+    </div>
+    ${positions.map(p=>{
+      const pnl=p.unrealized_pnl||0;
+      const col=pnlColor(pnl);
+      return`<div style="display:grid;grid-template-columns:60px 60px 80px 80px 80px 70px auto;gap:0;align-items:center;padding:10px 14px;border-bottom:1px solid var(--b1);font-family:var(--mono);font-size:12px">
+        <span style="color:var(--buy);font-weight:700">${p.ticker}</span>
+        <span>${Number(p.shares).toFixed(4)}</span>
+        <span>${fmt$(p.avg_cost)}</span>
+        <span>${p.current_price?fmt$(p.current_price):'—'}</span>
+        <span>${p.market_value?fmt$(p.market_value):'—'}</span>
+        <span style="color:${col}">${fmt$(pnl)}</span>
+        <button onclick="ptClose('${p.ticker}')" style="background:rgba(255,56,96,.1);border:1px solid rgba(255,56,96,.3);color:var(--sell);border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer">Close</button>
+      </div>`;
+    }).join('')}`;
+}
+
+function ptRenderPending(pending){
+  const el=document.getElementById('pt-pending');
+  document.getElementById('pt-pend-count').textContent=pending.length+' pending';
+  document.getElementById('nb-pending').textContent=pending.length;
+  if(!pending.length){el.innerHTML='<div style="padding:32px;text-align:center;color:var(--t3);font-size:12px">No pending trades.</div>';return;}
+  el.innerHTML=pending.map(t=>`
+    <div style="padding:12px 14px;border-bottom:1px solid var(--b1)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-family:var(--mono);font-weight:700;color:${t.action==='BUY'?'var(--buy)':'var(--sell)'}">${t.action} ${t.ticker}</span>
+          <span style="font-size:10px;color:var(--t3);font-family:var(--mono)">${Number(t.shares).toFixed(4)} shares @ ${fmt$(t.price)}</span>
+        </div>
+        <span style="font-family:var(--mono);font-size:12px;font-weight:700">${fmt$(t.total_value)}</span>
+      </div>
+      <div style="font-size:11px;color:var(--t3);margin-bottom:8px">${t.signal_reason||''}</div>
+      <div style="display:flex;gap:6px">
+        <button onclick="ptApprove(${t.id})" style="flex:1;background:rgba(0,232,124,.12);border:1px solid rgba(0,232,124,.3);color:var(--buy);border-radius:4px;padding:5px;font-size:11px;cursor:pointer">✓ Approve</button>
+        <button onclick="ptReject(${t.id})" style="flex:1;background:rgba(255,56,96,.08);border:1px solid rgba(255,56,96,.25);color:var(--sell);border-radius:4px;padding:5px;font-size:11px;cursor:pointer">✕ Reject</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function ptRenderTrades(trades){
+  const el=document.getElementById('pt-trades');
+  if(!trades.length){el.innerHTML='<div style="padding:32px;text-align:center;color:var(--t3);font-size:12px">No trades yet.</div>';return;}
+  el.innerHTML=`
+    <div style="display:grid;grid-template-columns:60px 50px 60px 80px 90px 90px 100px 1fr;gap:0;font-size:9px;color:var(--t3);font-family:var(--mono);text-transform:uppercase;padding:6px 14px;border-bottom:1px solid var(--b1)">
+      <span>Ticker</span><span>Action</span><span>Mode</span><span>Shares</span><span>Price</span><span>Total</span><span>P&L</span><span>Date</span>
+    </div>
+    ${trades.map(t=>{
+      const col=t.action==='BUY'?'var(--buy)':'var(--sell)';
+      const pnlStr=t.pnl!=null?fmt$(t.pnl):'—';
+      const pnlCol=t.pnl!=null?pnlColor(t.pnl):'var(--t3)';
+      const dt=t.executed_at?new Date(t.executed_at).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'—';
+      return`<div style="display:grid;grid-template-columns:60px 50px 60px 80px 90px 90px 100px 1fr;gap:0;align-items:center;padding:9px 14px;border-bottom:1px solid var(--b1);font-family:var(--mono);font-size:11px">
+        <span style="font-weight:700">${t.ticker}</span>
+        <span style="color:${col};font-weight:700">${t.action}</span>
+        <span style="color:var(--t3);font-size:10px">${t.mode}</span>
+        <span>${Number(t.shares).toFixed(4)}</span>
+        <span>${fmt$(t.price)}</span>
+        <span>${fmt$(t.total_value)}</span>
+        <span style="color:${pnlCol}">${pnlStr}</span>
+        <span style="color:var(--t3);font-size:10px">${dt}</span>
+      </div>`;
+    }).join('')}`;
+}
+
+async function ptLoadSEC(){
+  const form=document.getElementById('pt-sec-filter').value;
+  const url=`${API}/api/sec/filings${form?'?form='+form:''}`;
+  try{
+    const r=await fetch(url);
+    const j=await r.json();
+    const el=document.getElementById('pt-sec');
+    if(!j.ok||!j.filings.length){
+      el.innerHTML='<div style="padding:32px;text-align:center;color:var(--t3);font-size:12px">No filings stored yet. Click "Fetch SEC Filings" to load.</div>';
+      return;
+    }
+    el.innerHTML=`
+      <div style="display:grid;grid-template-columns:60px 55px 80px 70px 1fr;gap:0;font-size:9px;color:var(--t3);font-family:var(--mono);text-transform:uppercase;padding:6px 14px;border-bottom:1px solid var(--b1)">
+        <span>Ticker</span><span>Form</span><span>Filed</span><span>Sentiment</span><span>Title</span>
+      </div>
+      ${j.filings.map(f=>{
+        const sc=f.sentiment_score||0;
+        const scCol=sc>0.1?'var(--buy)':sc<-0.1?'var(--sell)':'var(--t2)';
+        const scLbl=f.sentiment_label||'NEUTRAL';
+        return`<div style="display:grid;grid-template-columns:60px 55px 80px 70px 1fr;gap:0;align-items:center;padding:9px 14px;border-bottom:1px solid var(--b1);font-family:var(--mono);font-size:11px">
+          <span style="color:var(--acc);font-weight:700">${f.ticker}</span>
+          <span style="color:var(--t3)">${f.form_type}</span>
+          <span>${f.filed_date}</span>
+          <span style="color:${scCol};font-size:10px">${scLbl}</span>
+          <a href="${f.url}" target="_blank" style="color:var(--t2);text-decoration:none;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${f.title||''}">${f.title||'View filing →'}</a>
+        </div>`;
+      }).join('')}`;
+  }catch(e){console.error('SEC load error',e);}
+}
+
+async function ptRunCycle(){
+  const btn=document.getElementById('ptRunBtn');
+  btn.classList.add('busy');btn.textContent='Running…';
+  try{
+    const r=await fetch(`${API}/api/paper/run`,{method:'POST'});
+    const j=await r.json();
+    if(j.ok){
+      const auto=j.auto_executed?.length||0;
+      const q=j.queued_for_approval?.length||0;
+      alert(`Cycle complete!\n✅ Auto-executed: ${auto} trades\n⏳ Queued for approval: ${q} trades`);
+      ptLoadAll();
+    }else{alert('Error: '+(j.error||'Unknown'));}
+  }catch(e){alert('Request failed: '+e);}
+  btn.classList.remove('busy');btn.textContent='▶ Run Trading Cycle';
+}
+
+async function ptFetchSEC(){
+  const btn=document.getElementById('ptSECBtn');
+  btn.classList.add('busy');btn.textContent='Fetching…';
+  try{
+    const r=await fetch(`${API}/api/sec/fetch`,{method:'POST'});
+    const j=await r.json();
+    if(j.ok){alert(`Fetched ${j.fetched} filings from SEC EDGAR!`);ptLoadSEC();}
+    else{alert('Error: '+(j.error||'Unknown'));}
+  }catch(e){alert('Request failed: '+e);}
+  btn.classList.remove('busy');btn.textContent='📄 Fetch SEC Filings';
+}
+
+async function ptApprove(id){
+  const r=await fetch(`${API}/api/paper/approve/${id}`,{method:'POST'});
+  const j=await r.json();
+  if(j.ok)ptLoadAll(); else alert('Error: '+(j.error||'Unknown'));
+}
+
+async function ptReject(id){
+  const r=await fetch(`${API}/api/paper/reject/${id}`,{method:'POST'});
+  const j=await r.json();
+  if(j.ok)ptLoadAll(); else alert('Error: '+(j.error||'Unknown'));
+}
+
+async function ptClose(ticker){
+  if(!confirm(`Close your ${ticker} position at market price?`))return;
+  const r=await fetch(`${API}/api/paper/close/${ticker}`,{method:'POST'});
+  const j=await r.json();
+  if(j.ok){alert(`${ticker} closed. P&L: ${fmt$(j.pnl)}`);ptLoadAll();}
+  else alert('Error: '+(j.error||'Unknown'));
+}
+
+async function ptReset(){
+  if(!confirm('Reset paper account to $100,000? This clears ALL trades and positions.'))return;
+  const r=await fetch(`${API}/api/paper/reset`,{method:'POST'});
+  const j=await r.json();
+  if(j.ok){alert('Account reset to $100,000!');ptLoadAll();}
 }
 
 function setFilter(f,btn){curFilter=f;document.querySelectorAll('.chip').forEach(b=>b.className='chip');const m={ALL:'c-all',BUY:'c-buy',SELL:'c-sell',HOLD:'c-hold'};btn.classList.add(m[f]);renderGrid();}

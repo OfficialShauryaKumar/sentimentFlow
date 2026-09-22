@@ -21,6 +21,7 @@ from analysis.timeframe import (
     action_label,
     options_for_signal,
 )
+from database.db import sec_get_filings
 
 logger = logging.getLogger("recommender")
 
@@ -203,6 +204,22 @@ def build_recommendations(mentions: list[dict]) -> list[dict]:
     filtered = {k: v for k, v in by_ticker.items()
                 if v["total_traction"] >= config.MIN_TRACTION}
 
+    # ── Pull SEC filings sentiment from DB (blended into composite) ────────────
+    sec_by_ticker: dict[str, float] = {}
+    try:
+        all_filings = sec_get_filings(limit=500)
+        from collections import defaultdict as _dd
+        _sec_scores: dict[str, list] = _dd(list)
+        for f in all_filings:
+            if f.get("sentiment_score") is not None:
+                _sec_scores[f["ticker"]].append(float(f["sentiment_score"]))
+        for tk, scores in _sec_scores.items():
+            sec_by_ticker[tk] = sum(scores) / len(scores)
+        if sec_by_ticker:
+            logger.info(f"SEC sentiment loaded for {len(sec_by_ticker)} tickers.")
+    except Exception as e:
+        logger.warning(f"Could not load SEC filings from DB: {e}")
+
     logger.info(f"Fetching data for {len(filtered)} tickers…")
     results = []
 
@@ -239,6 +256,27 @@ def build_recommendations(mentions: list[dict]) -> list[dict]:
                 data["fundamentals"] = fund
         except Exception as e:
             logger.warning(f"Fundamental error for {ticker}: {e}")
+
+        # ── SEC filings sentiment blend ──────────────────────────────────────
+        # Weight: 70% social/news sentiment, 30% SEC filing sentiment
+        # If no SEC data exists for this ticker, falls back to pure social score
+        sec_score = sec_by_ticker.get(ticker)
+        if sec_score is not None:
+            blended_score = round(0.70 * sent_score + 0.30 * sec_score, 4)
+            data["sec_sentiment"]  = round(sec_score, 4)
+            data["sec_filing_count"] = len([f for f in (all_filings if 'all_filings' in dir() else []) if f["ticker"] == ticker])
+            data["composite_score"] = blended_score  # update for downstream use
+            logger.debug(f"{ticker}: social={sent_score:.3f} sec={sec_score:.3f} blended={blended_score:.3f}")
+            sent_score = blended_score
+        else:
+            data["sec_sentiment"]    = None
+            data["sec_filing_count"] = 0
+
+        # Attach recent SEC filings to the recommendation for the UI
+        try:
+            data["sec_filings"] = sec_get_filings(ticker=ticker, limit=5)
+        except Exception:
+            data["sec_filings"] = []
 
         # ── Short-term prediction ────────────────────────────────────────────
         try:

@@ -21,6 +21,7 @@ import logging
 import math
 from typing import Optional
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger("market_health")
 
@@ -108,35 +109,46 @@ def fetch_market_health() -> dict:
     Fetch all market indicators and compute overall health score,
     trajectory, regime, and plain-English reasoning.
     """
-    logger.info("Fetching market health indicators via stooq.com…")
+    logger.info("Fetching market health indicators via stooq.com (parallel)…")
 
-    # ── Core indices ──────────────────────────────────────────────────────────
-    spy  = _fetch("SPY")    # S&P 500
-    qqq  = _fetch("QQQ")    # Nasdaq 100
-    dia  = _fetch("DIA")    # Dow Jones
-    iwm  = _fetch("IWM")    # Russell 2000 (small-cap, risk appetite)
+    # ── Fetch all tickers in parallel (avoids sequential HTTP timeout) ────────
+    _all_tickers = [
+        "SPY", "QQQ", "DIA", "IWM",
+        "^VIX", "^TNX", "DX-Y.NYB",
+        "GLD", "USO",
+        "XLK", "XLF", "XLV", "XLE", "XLY", "XLU", "XLI", "XLB",
+    ]
 
-    # ── Fear & volatility ─────────────────────────────────────────────────────
-    vix  = _fetch("^VIX")   # CBOE Volatility Index
+    _results: dict[str, Optional[dict]] = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        future_map = {ex.submit(_fetch, t): t for t in _all_tickers}
+        for fut in as_completed(future_map):
+            sym = future_map[fut]
+            try:
+                _results[sym] = fut.result()
+            except Exception as e:
+                logger.warning(f"Parallel fetch failed for {sym}: {e}")
+                _results[sym] = None
 
-    # ── Macro / rates ─────────────────────────────────────────────────────────
-    tnx  = _fetch("^TNX")   # 10-year Treasury yield
-    dxy  = _fetch("DX-Y.NYB") # US Dollar index
+    spy = _results.get("SPY")
+    qqq = _results.get("QQQ")
+    dia = _results.get("DIA")
+    iwm = _results.get("IWM")
+    vix = _results.get("^VIX")
+    tnx = _results.get("^TNX")
+    dxy = _results.get("DX-Y.NYB")
+    gld = _results.get("GLD")
+    uso = _results.get("USO")
 
-    # ── Risk assets / commodities ─────────────────────────────────────────────
-    gld  = _fetch("GLD")    # Gold (safe haven)
-    uso  = _fetch("USO")    # Oil
-
-    # ── Sector ETFs ───────────────────────────────────────────────────────────
     sectors = {
-        "Technology":    _fetch("XLK"),
-        "Financials":    _fetch("XLF"),
-        "Healthcare":    _fetch("XLV"),
-        "Energy":        _fetch("XLE"),
-        "Consumer Disc": _fetch("XLY"),
-        "Utilities":     _fetch("XLU"),
-        "Industrials":   _fetch("XLI"),
-        "Materials":     _fetch("XLB"),
+        "Technology":    _results.get("XLK"),
+        "Financials":    _results.get("XLF"),
+        "Healthcare":    _results.get("XLV"),
+        "Energy":        _results.get("XLE"),
+        "Consumer Disc": _results.get("XLY"),
+        "Utilities":     _results.get("XLU"),
+        "Industrials":   _results.get("XLI"),
+        "Materials":     _results.get("XLB"),
     }
 
     # ── Compute health score ──────────────────────────────────────────────────

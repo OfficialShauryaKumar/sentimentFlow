@@ -5,6 +5,7 @@ Includes persistent portfolio management, paper trading, and SEC filings endpoin
 import csv
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -95,6 +96,36 @@ app = Flask(__name__, static_folder="dashboard")
 CORS(app)
 init_db()
 
+# ── Background refresh state ──────────────────────────────────────────────────
+_refresh_lock    = threading.Lock()
+_refresh_running = False   # True while _run_analysis is in progress
+
+
+def _run_analysis_bg():
+    """Run analysis in a background thread and cache the result."""
+    global _refresh_running
+    try:
+        data = _run_analysis()
+        cache_set("analysis_v2", data)
+        logger.info("Background refresh complete.")
+    except Exception as e:
+        logger.error(f"Background refresh failed: {e}", exc_info=True)
+    finally:
+        with _refresh_lock:
+            _refresh_running = False
+
+
+def _start_bg_refresh():
+    """Start background refresh if one is not already running."""
+    global _refresh_running
+    with _refresh_lock:
+        if _refresh_running:
+            return False
+        _refresh_running = True
+    t = threading.Thread(target=_run_analysis_bg, daemon=True)
+    t.start()
+    return True
+
 
 def _run_analysis() -> dict:
     logger.info("Starting full scrape + analysis…")
@@ -130,12 +161,44 @@ def get_recommendations():
     force = request.args.get("refresh", "false").lower() == "true"
     if force:
         cache_invalidate("analysis_v2")
+        started = _start_bg_refresh()
+        # Return immediately so Render doesn't time out.
+        # Frontend will poll this endpoint until refreshing=false.
+        return jsonify({
+            "ok":             True,
+            "refreshing":     True,
+            "started":        started,
+            "recommendations":[],
+            "total_mentions": 0,
+            "reddit_mentions":0,
+            "news_mentions":  0,
+            "refreshed_at":   None,
+            "engine":         config.USE_FINBERT and "finbert" or "vader",
+            "portfolio_size": config.PORTFOLIO_SIZE,
+            "count":          0,
+        })
+
+    # Normal (non-force) read: return cached data if available, else start bg refresh
     data = cache_get("analysis_v2")
     if data is None:
-        data = _run_analysis()
-        cache_set("analysis_v2", data)
+        # No cache yet — kick off background refresh and tell frontend to poll
+        _start_bg_refresh()
+        return jsonify({
+            "ok":             True,
+            "refreshing":     True,
+            "recommendations":[],
+            "total_mentions": 0,
+            "reddit_mentions":0,
+            "news_mentions":  0,
+            "refreshed_at":   None,
+            "engine":         config.USE_FINBERT and "finbert" or "vader",
+            "portfolio_size": config.PORTFOLIO_SIZE,
+            "count":          0,
+        })
+
     return jsonify({
         "ok":             True,
+        "refreshing":     _refresh_running,
         "recommendations":data["recommendations"],
         "total_mentions": data["total_mentions"],
         "reddit_mentions":data["reddit_mentions"],
@@ -150,10 +213,8 @@ def get_recommendations():
 @app.route("/api/refresh", methods=["POST"])
 def force_refresh():
     cache_invalidate("analysis_v2")
-    data = _run_analysis()
-    cache_set("analysis_v2", data)
-    return jsonify({"ok": True, "count": len(data["recommendations"]),
-                    "refreshed_at": data["refreshed_at"]})
+    started = _start_bg_refresh()
+    return jsonify({"ok": True, "refreshing": True, "started": started})
 
 
 @app.route("/api/ticker/<ticker>", methods=["GET"])
@@ -161,8 +222,8 @@ def get_ticker(ticker: str):
     ticker = ticker.upper()
     data   = cache_get("analysis_v2")
     if data is None:
-        data = _run_analysis()
-        cache_set("analysis_v2", data)
+        _start_bg_refresh()
+        return jsonify({"ok": False, "error": "No data yet — refresh in progress."}), 503
     match = next((r for r in data["recommendations"] if r["ticker"] == ticker), None)
     if not match:
         return jsonify({"ok": False, "error": f"{ticker} not found."}), 404

@@ -41,7 +41,9 @@ MIN_INTERVAL_SEC = 1.0
 
 # Set SKIP_YFINANCE=true in .env to bypass yfinance entirely (useful when
 # Yahoo has rate-limited your IP and recovery requires waiting hours).
-SKIP_YFINANCE = os.getenv("SKIP_YFINANCE", "false").lower() == "true"
+# Defaults to true on Render (RENDER env var is set there) — Yahoo blocks
+# yfinance's cookie/crumb flow from cloud IPs and each call just hangs.
+SKIP_YFINANCE = os.getenv("SKIP_YFINANCE", "true" if os.getenv("RENDER") else "false").lower() == "true"
 
 # Circuit breaker: after this many consecutive rate-limit errors in a single
 # run, stop trying yfinance entirely. Saves you from the ~10-minute hang

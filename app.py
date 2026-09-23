@@ -93,22 +93,42 @@ def _archive_snapshot(recs: list[dict]) -> None:
 
 
 app = Flask(__name__, static_folder="dashboard")
+
+# NaN/Inf are not valid JSON and crash the browser's JSON.parse — emit null instead.
+import math as _math
+from flask.json.provider import DefaultJSONProvider as _DJP
+def _clean_nan(o):
+    if isinstance(o, float):
+        return None if (_math.isnan(o) or _math.isinf(o)) else o
+    if isinstance(o, dict):
+        return {k: _clean_nan(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_clean_nan(v) for v in o]
+    return o
+class _SafeJSON(_DJP):
+    def dumps(self, obj, **kw):
+        return super().dumps(_clean_nan(obj), **kw)
+app.json = _SafeJSON(app)
 CORS(app)
 init_db()
 
 # ── Background refresh state ──────────────────────────────────────────────────
 _refresh_lock    = threading.Lock()
 _refresh_running = False   # True while _run_analysis is in progress
+_refresh_error   = None    # last background failure message
 
 
 def _run_analysis_bg():
     """Run analysis in a background thread and cache the result."""
-    global _refresh_running
+    global _refresh_running, _refresh_error
     try:
+        t0 = datetime.now(timezone.utc)
         data = _run_analysis()
         cache_set("analysis_v2", data)
-        logger.info("Background refresh complete.")
+        _refresh_error = None
+        logger.info(f"Background refresh complete in {(datetime.now(timezone.utc)-t0).total_seconds():.1f}s.")
     except Exception as e:
+        _refresh_error = f"{type(e).__name__}: {e}"
         logger.error(f"Background refresh failed: {e}", exc_info=True)
     finally:
         with _refresh_lock:
@@ -181,6 +201,9 @@ def get_recommendations():
     # Normal (non-force) read: return cached data if available, else start bg refresh
     data = cache_get("analysis_v2")
     if data is None:
+        if _refresh_error and not _refresh_running:
+            err, _ = _refresh_error, None
+            return jsonify({"ok": False, "error": f"Analysis failed: {err}"}), 500
         # No cache yet — kick off background refresh and tell frontend to poll
         _start_bg_refresh()
         return jsonify({
@@ -208,6 +231,20 @@ def get_recommendations():
         "portfolio_size": data["portfolio_size"],
         "count":          len(data["recommendations"]),
     })
+
+
+@app.route("/api/debug/price", methods=["GET"])
+def debug_price():
+    """Quick check that the price source works from this server."""
+    from analysis import price_client
+    sym = request.args.get("symbol", "SPY").upper()
+    t0 = datetime.now(timezone.utc)
+    p = price_client.get_latest_price(sym)
+    return jsonify({"symbol": sym, "price": p,
+                    "ms": int((datetime.now(timezone.utc)-t0).total_seconds()*1000),
+                    "error": price_client.last_error.get(sym),
+                    "refresh_running": _refresh_running,
+                    "refresh_error": _refresh_error})
 
 
 @app.route("/api/refresh", methods=["POST"])

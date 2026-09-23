@@ -608,7 +608,7 @@ async function loadData(force=false){
     // Poll every 4s until the background job finishes (up to 90s)
     if(j.refreshing){
       let attempts=0;
-      while(j.refreshing && attempts<22){
+      while(j.refreshing && attempts<45){
         await new Promise(res=>setTimeout(res,4000));
         attempts++;
         const r2=await fetch(`${API}/api/recommendations`);

@@ -49,44 +49,47 @@ def _fetch(ticker: str) -> Optional[dict]:
     prev_close = float(close.iloc[-2]) if len(close) >= 2 else price
     change_pct = round((price - prev_close) / prev_close * 100, 2) if prev_close else 0
 
-        # 1-day, 5-day, 20-day, 50-day returns
-        def pct_return(days):
-            if len(close) > days:
-                return round((float(close.iloc[-1]) - float(close.iloc[-days])) / float(close.iloc[-days]) * 100, 2)
-            return None
+    # 1-day, 5-day, 20-day, 50-day returns
+    def pct_return(days):
+        if len(close) > days:
+            return round((float(close.iloc[-1]) - float(close.iloc[-days])) / float(close.iloc[-days]) * 100, 2)
+        return None
 
-        # 20-day and 50-day SMA
-        sma20 = round(float(close.rolling(20).mean().iloc[-1]), 2) if len(close) >= 20 else None
-        sma50 = round(float(close.rolling(50).mean().iloc[-1]), 2) if len(close) >= 50 else None
+    # 20-day and 50-day SMA
+    sma20 = round(float(close.rolling(20).mean().iloc[-1]), 2) if len(close) >= 20 else None
+    sma50 = round(float(close.rolling(50).mean().iloc[-1]), 2) if len(close) >= 50 else None
 
-        # RSI
-        delta = close.diff()
-        gain  = delta.clip(lower=0).ewm(com=13, min_periods=14).mean()
-        loss  = (-delta).clip(lower=0).ewm(com=13, min_periods=14).mean()
-        rs    = gain / loss.replace(0, float("nan"))
-        rsi_val = round(float((100 - 100 / (1 + rs)).iloc[-1]), 1) if not loss.empty else 50
+    # RSI
+    try:
+        delta   = close.diff()
+        gain    = delta.clip(lower=0).ewm(com=13, min_periods=14).mean()
+        loss    = (-delta).clip(lower=0).ewm(com=13, min_periods=14).mean()
+        rs      = gain / loss.replace(0, float("nan"))
+        rsi_val = round(float((100 - 100 / (1 + rs)).iloc[-1]), 1)
+    except Exception:
+        rsi_val = 50
 
-        # 20-day volatility (annualised)
+    # 20-day volatility (annualised)
+    try:
         daily_ret  = close.pct_change().dropna()
         volatility = round(float(daily_ret.tail(20).std()) * (252 ** 0.5) * 100, 1) if len(daily_ret) >= 20 else None
+    except Exception:
+        volatility = None
 
-        return {
-            "price":       round(price, 2) if price else None,
-            "change_pct":  change_pct,
-            "ret_1d":      change_pct,
-            "ret_5d":      pct_return(5),
-            "ret_20d":     pct_return(20),
-            "ret_50d":     pct_return(50),
-            "sma20":       sma20,
-            "sma50":       sma50,
-            "above_sma20": price > sma20 if price and sma20 else None,
-            "above_sma50": price > sma50 if price and sma50 else None,
-            "rsi":         rsi_val,
-            "volatility":  volatility,
-        }
-    except Exception as e:
-        logger.debug(f"Fetch failed for {ticker}: {e}")
-        return None
+    return {
+        "price":       round(price, 2),
+        "change_pct":  change_pct,
+        "ret_1d":      change_pct,
+        "ret_5d":      pct_return(5),
+        "ret_20d":     pct_return(20),
+        "ret_50d":     pct_return(50),
+        "sma20":       sma20,
+        "sma50":       sma50,
+        "above_sma20": price > sma20 if sma20 else None,
+        "above_sma50": price > sma50 if sma50 else None,
+        "rsi":         rsi_val,
+        "volatility":  volatility,
+    }
 
 
 def fetch_market_health() -> dict:

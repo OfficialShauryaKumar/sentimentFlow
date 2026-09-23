@@ -141,8 +141,10 @@ main{max-width:1500px;margin:0 auto;padding:18px 16px}
 .saved-row:last-child{border-bottom:none}
 .row-ticker{color:var(--buy);font-weight:700;font-size:13px}
 .row-val{color:var(--t1)}.row-val.muted{color:var(--t3)}
-.add-form{display:grid;grid-template-columns:60px 68px 86px 96px auto auto;gap:6px;align-items:center;padding:9px 12px;background:rgba(108,114,247,.06);border-bottom:1px solid var(--acc);margin-bottom:4px}
-.ip-save-btn{background:var(--acc);color:#fff;border:none;border-radius:4px;padding:5px 10px;font-size:11px;cursor:pointer;font-family:var(--sans);white-space:nowrap;height:28px}
+.add-form{display:flex;flex-direction:column;gap:6px;padding:10px 0;background:rgba(108,114,247,.06);border-bottom:1px solid var(--acc);margin:0 -16px 4px;padding-left:16px;padding-right:16px}
+.add-form-r1{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.add-form-r2{display:grid;grid-template-columns:1fr auto auto;gap:6px;align-items:center}
+.ip-save-btn{background:var(--acc);color:#fff;border:none;border-radius:4px;padding:5px 12px;font-size:11px;cursor:pointer;font-family:var(--sans);white-space:nowrap;height:28px}
 .ip-save-btn:hover{opacity:.85}
 .ip-del:hover{border-color:var(--sell);color:var(--sell)}
 .add-row-btn{display:flex;align-items:center;justify-content:center;gap:6px;background:none;border:1px dashed var(--b2);border-radius:6px;padding:9px;color:var(--t3);cursor:pointer;font-size:12px;transition:all .15s;width:100%}
@@ -707,14 +709,18 @@ function addRow(ticker='',shares='',cost=''){
   // This now renders a temporary input form at the top
   if(document.getElementById('addForm')) return; // already open
   const form=document.createElement('div');
-  form.className='ip-row add-form';form.id='addForm';
+  form.className='add-form';form.id='addForm';
   form.innerHTML=`
-    <input class="ip-input ticker-in" id="nTicker" placeholder="AAPL" value="${ticker}" oninput="this.value=this.value.toUpperCase()">
-    <input class="ip-input" id="nShares" type="number" placeholder="10" min="0.01" step="0.01" value="${shares}">
-    <input class="ip-input" id="nCost"   type="number" placeholder="150.00" min="0.01" step="0.01" value="${cost}">
-    <input class="ip-input" id="nDate"   type="date" style="font-size:10px">
-    <button class="ip-save-btn" onclick="saveNewHolding()">Save</button>
-    <button class="ip-del" onclick="cancelAddForm()">✕</button>`;
+    <div class="add-form-r1">
+      <input class="ip-input ticker-in" id="nTicker" placeholder="AAPL" value="${ticker}" oninput="this.value=this.value.toUpperCase()">
+      <input class="ip-input" id="nShares" type="number" placeholder="Shares" min="0.01" step="0.01" value="${shares}">
+      <input class="ip-input" id="nCost"   type="number" placeholder="Avg Cost" min="0.01" step="0.01" value="${cost}">
+    </div>
+    <div class="add-form-r2">
+      <input class="ip-input" id="nDate" type="date" style="font-size:10px">
+      <button class="ip-save-btn" onclick="saveNewHolding()">Save</button>
+      <button class="ip-del" onclick="cancelAddForm()">✕</button>
+    </div>`;
   const container=document.getElementById('holdingsRows');
   container.insertBefore(form,container.firstChild);
   document.getElementById('nTicker').focus();

@@ -18,80 +18,36 @@ Produces:
 """
 
 import logging
-import time
 from typing import Optional
 from datetime import datetime, timezone
 
+import numpy as np
+
 logger = logging.getLogger("market_health")
 
-try:
-    import yfinance as yf
-    import numpy as np
-    _ok = True
-except ImportError:
-    _ok = False
-    logger.warning("yfinance not installed — market health unavailable.")
-
-# Throttled yfinance client (avoids 429 rate-limit errors).
-from analysis.yf_client import reset_circuit
-
-# User-Agent that looks like a real browser — reduces Yahoo rate-limiting
-_YF_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    )
-}
+# Use stooq.com for price data — Yahoo Finance blocks cloud hosting IPs.
+from analysis.price_client import fetch_history
 
 
 def _fetch(ticker: str) -> Optional[dict]:
-    """Fetch quote + recent history for a single ticker using yf.download().
+    """Fetch quote + 3-month history for a single ticker via stooq.com.
 
-    Uses yf.download() instead of Ticker.fast_info because:
-      - It hits a different Yahoo endpoint (chart API) that is less aggressively
-        rate-limited on cloud IPs.
-      - It works after market hours (returns last close price).
-      - Avoids the shared circuit breaker that stock-ticker fetches can trip.
+    Uses stooq.com CSV API instead of Yahoo Finance/yfinance because
+    Render (and other cloud hosts) get rate-limited / blocked by Yahoo.
+    stooq requires no API key and returns daily OHLCV CSV data.
     """
-    if not _ok:
+    hist = fetch_history(ticker, days=120)
+    if hist is None or hist.empty or "Close" not in hist.columns:
         return None
-    try:
-        import requests as _req
-        session = _req.Session()
-        session.headers.update(_YF_HEADERS)
 
-        hist = yf.download(
-            ticker,
-            period="3mo",
-            interval="1d",
-            progress=False,
-            auto_adjust=True,
-            session=session,
-        )
+    close = hist["Close"].dropna()
+    if close.empty:
+        return None
 
-        if hist is None or hist.empty:
-            return None
-
-        # yf.download returns MultiIndex columns when downloading a single
-        # ticker in newer versions — flatten if needed.
-        if isinstance(hist.columns, type(hist.columns)) and hasattr(hist.columns, "levels"):
-            try:
-                hist.columns = hist.columns.get_level_values(0)
-            except Exception:
-                pass
-
-        if "Close" not in hist.columns:
-            return None
-
-        close = hist["Close"].dropna()
-        if close.empty:
-            return None
-
-        # Use last available close (works 24/7, not just during trading hours)
-        price     = float(close.iloc[-1])
-        prev_close = float(close.iloc[-2]) if len(close) >= 2 else price
-        change_pct = round((price - prev_close) / prev_close * 100, 2) if prev_close else 0
+    # Use last available close (works 24/7, not just during trading hours)
+    price      = float(close.iloc[-1])
+    prev_close = float(close.iloc[-2]) if len(close) >= 2 else price
+    change_pct = round((price - prev_close) / prev_close * 100, 2) if prev_close else 0
 
         # 1-day, 5-day, 20-day, 50-day returns
         def pct_return(days):
@@ -138,10 +94,7 @@ def fetch_market_health() -> dict:
     Fetch all market indicators and compute overall health score,
     trajectory, regime, and plain-English reasoning.
     """
-    # Reset the circuit breaker so stock-ticker failures earlier in the run
-    # don't permanently block market health fetches.
-    reset_circuit()
-    logger.info("Fetching market health indicators…")
+    logger.info("Fetching market health indicators via stooq.com…")
 
     # ── Core indices ──────────────────────────────────────────────────────────
     spy  = _fetch("SPY")    # S&P 500

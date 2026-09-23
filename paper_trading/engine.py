@@ -11,10 +11,9 @@ Ignored               : conviction score < 0.25 (1★ / 2★)
 import logging
 from datetime import datetime, timezone
 
-import yfinance as yf
-
 import config
 from database.db import get_connection
+from analysis.price_client import get_latest_price as _stooq_price
 
 logger = logging.getLogger("paper_trading")
 
@@ -32,17 +31,11 @@ def _now() -> str:
 
 
 def _get_price(ticker: str) -> float | None:
-    """Fetch current price via yfinance."""
+    """Fetch current price via stooq.com (avoids Yahoo Finance cloud-IP blocks)."""
     try:
-        t = yf.Ticker(ticker)
-        info = t.fast_info
-        price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
+        price = _stooq_price(ticker)
         if price and price > 0:
             return float(price)
-        # fallback: history
-        hist = t.history(period="1d")
-        if not hist.empty:
-            return float(hist["Close"].iloc[-1])
     except Exception as e:
         logger.warning(f"Price fetch failed for {ticker}: {e}")
     return None
@@ -356,14 +349,28 @@ def run_paper_trading_cycle(recommendations: list[dict]) -> dict:
 
     for rec in recommendations:
         ticker = rec.get("ticker", "").upper()
-        action = rec.get("action", "")         # BUY / SELL / HOLD / AVOID
-        score  = float(rec.get("score", 0.0))
-        reason = rec.get("reason", "")
 
-        # Only trade on BUY and SELL signals
-        if action not in ("BUY", "SELL"):
-            skipped.append({"ticker": ticker, "reason": f"Signal is {action}, not trading."})
+        # Recommendations use `signal` / `short_term.signal`, not `action`.
+        # Prefer short_term signal (STRONG BUY / BUY / HOLD / SELL / STRONG SELL)
+        # because it's percentile-ranked across the watchlist.
+        st     = rec.get("short_term") or {}
+        signal = st.get("signal") or rec.get("signal", "HOLD")
+
+        if signal in ("STRONG BUY", "BUY"):
+            action = "BUY"
+        elif signal in ("STRONG SELL", "SELL"):
+            action = "SELL"
+        else:
+            skipped.append({"ticker": ticker, "reason": f"Signal is {signal} — skipping."})
             continue
+
+        # Map signal strength → conviction score (0–1).
+        # STRONG signals exceed AUTO_TRADE_MIN (0.40) → auto-execute.
+        # Regular BUY/SELL exceed MANUAL_QUEUE_MIN (0.25) → queue for approval.
+        _score_map = {"STRONG BUY": 0.55, "BUY": 0.30, "STRONG SELL": 0.55, "SELL": 0.30}
+        score  = _score_map.get(signal, 0.0)
+        reason = (st.get("action") or
+                  f"{signal} | composite={rec.get('composite_score', 0):.3f}")
 
         # Get current price
         price = _get_price(ticker)

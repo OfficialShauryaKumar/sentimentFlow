@@ -96,12 +96,7 @@ def scrape_rss(watchlist: list[str] = None) -> list[dict]:
 
     for feed_name, feed_url in config.RSS_FEEDS.items():
         try:
-            # feedparser.parse(url) has no timeout and can hang forever on a
-            # slow feed — fetch with requests (8s timeout) and parse the bytes.
-            import requests as _rq
-            _resp = _rq.get(feed_url, timeout=8,
-                            headers={"User-Agent": "Mozilla/5.0 SentimentFlow/1.0"})
-            feed = feedparser.parse(_resp.content)
+            feed = feedparser.parse(feed_url)
 
             for entry in feed.entries[:config.MAX_POSTS]:
                 title   = entry.get("title", "")

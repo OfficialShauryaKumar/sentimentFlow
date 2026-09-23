@@ -1,7 +1,7 @@
 """
 analysis/indicators.py — Real price-based technical indicators
 
-Fetches 6 months of OHLCV history from stooq.com (via price_client) and computes:
+Fetches 6 months of OHLCV history from yfinance and computes:
   - RSI (14-day)
   - MACD (12/26/9)
   - Bollinger Bands (20-day, 2σ)
@@ -11,38 +11,37 @@ Fetches 6 months of OHLCV history from stooq.com (via price_client) and computes
   - Support / resistance from recent swing points
   - 52-week range position
   - Trend direction (up/down/sideways)
-
-Note: yfinance is NOT used here — it is blocked on Render's cloud IPs.
-Uses stooq.com CSV API instead (free, no API key, no cloud-IP blocks).
 """
 
 import logging
 import numpy as np
-import pandas as pd
 from typing import Optional
 
 logger = logging.getLogger("indicators")
 
-# Use stooq.com for all price data (Yahoo Finance blocks cloud hosting IPs).
-from analysis.price_client import fetch_history as _stooq_fetch_history, get_latest_price
+try:
+    import yfinance as yf
+    import pandas as pd
+    _yf_ok = True
+except ImportError:
+    _yf_ok = False
+    logger.warning("yfinance/pandas not installed — technical indicators unavailable.")
 
-_PERIOD_DAYS = {
-    "1mo": 35,
-    "3mo": 95,
-    "6mo": 185,
-    "1y":  370,
-    "2y":  740,
-    "5y":  1830,
-}
+# Throttled yfinance client (avoids 429 rate-limit errors).
+from analysis.yf_client import get_ticker, call_with_retry
 
 
 # ─── Data fetch ──────────────────────────────────────────────────────────────
 
-def fetch_history(ticker: str, period: str = "6mo", interval: str = "1d") -> Optional[pd.DataFrame]:
-    """Fetch OHLCV history via stooq.com. Returns DataFrame or None on failure."""
-    days = _PERIOD_DAYS.get(period, 185)
+def fetch_history(ticker: str, period: str = "6mo", interval: str = "1d") -> Optional["pd.DataFrame"]:
+    """Fetch OHLCV history. Returns DataFrame or None on failure."""
+    if not _yf_ok:
+        return None
     try:
-        hist = _stooq_fetch_history(ticker, days=days)
+        t = get_ticker(ticker)
+        if t is None:
+            return None  # yfinance disabled or circuit breaker open
+        hist = call_with_retry(lambda: t.history(period=period, interval=interval))
         if hist is None or hist.empty or len(hist) < 20:
             return None
         return hist
@@ -52,32 +51,40 @@ def fetch_history(ticker: str, period: str = "6mo", interval: str = "1d") -> Opt
 
 
 def fetch_quote(ticker: str) -> Optional[dict]:
-    """Fetch current price and basic info from stooq.com history."""
+    """Fetch current price, volume, and basic info."""
+    if not _yf_ok:
+        return None
     try:
-        # Fetch ~1 year for 52-week range; stooq returns daily OHLCV
-        hist = _stooq_fetch_history(ticker, days=370)
-        if hist is None or hist.empty:
+        t = get_ticker(ticker)
+        if t is None:
+            return None  # yfinance disabled or circuit breaker open
+        # fast_info is lazy — touching one field forces the network call;
+        # wrap it so we retry on 429.
+        fi = call_with_retry(lambda: t.fast_info)
+        if fi is None:
             return None
-
-        close = hist["Close"].dropna()
-        if close.empty:
-            return None
-
-        last  = float(close.iloc[-1])
-        prev  = float(close.iloc[-2]) if len(close) >= 2 else last
-        high52 = float(hist["High"].tail(252).max()) if "High" in hist.columns else None
-        low52  = float(hist["Low"].tail(252).min())  if "Low"  in hist.columns else None
-        vol    = int(hist["Volume"].tail(63).mean())  if "Volume" in hist.columns and hist["Volume"].tail(63).sum() > 0 else None
-
+        # Force eager fetch of the fields we need (also retried).
+        snapshot = call_with_retry(lambda: {
+            "last_price":                 fi.last_price,
+            "previous_close":             fi.previous_close,
+            "three_month_average_volume": fi.three_month_average_volume,
+            "year_high":                  fi.year_high,
+            "year_low":                   fi.year_low,
+            "market_cap":                 fi.market_cap,
+            "currency":                   fi.currency,
+        })
+        last  = snapshot["last_price"]
+        prev  = snapshot["previous_close"]
         return {
-            "price":       round(last, 2),
-            "prev_close":  round(prev, 2),
-            "change_pct":  round((last - prev) / prev * 100, 2) if prev else None,
-            "volume":      vol,
-            "week52_high": round(high52, 2) if high52 else None,
-            "week52_low":  round(low52, 2)  if low52  else None,
-            "market_cap":  None,   # stooq doesn't provide market cap
-            "currency":    "USD",
+            "price":          round(float(last), 2)  if last else None,
+            "prev_close":     round(float(prev), 2)  if prev else None,
+            "change_pct":     round((last - prev) / prev * 100, 2)
+                              if last and prev else None,
+            "volume":         int(snapshot["three_month_average_volume"]) if snapshot["three_month_average_volume"] else None,
+            "week52_high":    round(float(snapshot["year_high"]), 2)  if snapshot["year_high"]  else None,
+            "week52_low":     round(float(snapshot["year_low"]), 2)   if snapshot["year_low"]   else None,
+            "market_cap":     int(snapshot["market_cap"])             if snapshot["market_cap"] else None,
+            "currency":       snapshot["currency"] or "USD",
         }
     except Exception as e:
         logger.debug(f"Quote fetch failed for {ticker}: {e}")

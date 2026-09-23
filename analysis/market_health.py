@@ -18,90 +18,82 @@ Produces:
 """
 
 import logging
-import math
+import time
 from typing import Optional
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger("market_health")
 
+try:
+    import yfinance as yf
+    import numpy as np
+    _ok = True
+except ImportError:
+    _ok = False
+    logger.warning("yfinance not installed — market health unavailable.")
 
-def _safe(val, default=None):
-    """Return default if val is NaN, Inf, or None — keeps JSON serializable."""
-    if val is None:
-        return default
-    try:
-        if math.isnan(val) or math.isinf(val):
-            return default
-    except (TypeError, ValueError):
-        pass
-    return val
-
-# Use stooq.com for price data — Yahoo Finance blocks cloud hosting IPs.
-from analysis.price_client import fetch_history
+# Throttled yfinance client (avoids 429 rate-limit errors).
+from analysis.yf_client import get_ticker, call_with_retry, is_circuit_open
 
 
 def _fetch(ticker: str) -> Optional[dict]:
-    """Fetch quote + 3-month history for a single ticker via stooq.com.
-
-    Uses stooq.com CSV API instead of Yahoo Finance/yfinance because
-    Render (and other cloud hosts) get rate-limited / blocked by Yahoo.
-    stooq requires no API key and returns daily OHLCV CSV data.
-    """
-    hist = fetch_history(ticker, days=120)
-    if hist is None or hist.empty or "Close" not in hist.columns:
+    """Fetch quote + recent history for a single ticker."""
+    if not _ok or is_circuit_open():
         return None
-
-    close = hist["Close"].dropna()
-    if close.empty:
-        return None
-
-    # Use last available close (works 24/7, not just during trading hours)
-    price      = float(close.iloc[-1])
-    prev_close = float(close.iloc[-2]) if len(close) >= 2 else price
-    change_pct = round((price - prev_close) / prev_close * 100, 2) if prev_close else 0
-
-    # 1-day, 5-day, 20-day, 50-day returns
-    def pct_return(days):
-        if len(close) > days:
-            return round((float(close.iloc[-1]) - float(close.iloc[-days])) / float(close.iloc[-days]) * 100, 2)
-        return None
-
-    # 20-day and 50-day SMA
-    sma20 = round(float(close.rolling(20).mean().iloc[-1]), 2) if len(close) >= 20 else None
-    sma50 = round(float(close.rolling(50).mean().iloc[-1]), 2) if len(close) >= 50 else None
-
-    # RSI
     try:
-        delta   = close.diff()
-        gain    = delta.clip(lower=0).ewm(com=13, min_periods=14).mean()
-        loss    = (-delta).clip(lower=0).ewm(com=13, min_periods=14).mean()
-        rs      = gain / loss.replace(0, float("nan"))
-        rsi_val = round(float((100 - 100 / (1 + rs)).iloc[-1]), 1)
-    except Exception:
-        rsi_val = 50
+        t = get_ticker(ticker)
+        if t is None:
+            return None  # yfinance disabled or circuit open
+        fi   = call_with_retry(lambda: t.fast_info)
+        hist = call_with_retry(lambda: t.history(period="3mo", interval="1d"))
 
-    # 20-day volatility (annualised)
-    try:
+        if fi is None or hist is None or hist.empty:
+            return None
+
+        price      = float(fi.last_price)      if fi.last_price      else None
+        prev_close = float(fi.previous_close)  if fi.previous_close  else None
+        change_pct = round((price - prev_close) / prev_close * 100, 2) if price and prev_close else 0
+
+        close = hist["Close"]
+
+        # 1-day, 5-day, 20-day, 50-day returns
+        def pct_return(days):
+            if len(close) > days:
+                return round((float(close.iloc[-1]) - float(close.iloc[-days])) / float(close.iloc[-days]) * 100, 2)
+            return None
+
+        # 20-day and 50-day SMA
+        sma20 = round(float(close.rolling(20).mean().iloc[-1]), 2) if len(close) >= 20 else None
+        sma50 = round(float(close.rolling(50).mean().iloc[-1]), 2) if len(close) >= 50 else None
+
+        # RSI
+        delta = close.diff()
+        gain  = delta.clip(lower=0).ewm(com=13, min_periods=14).mean()
+        loss  = (-delta).clip(lower=0).ewm(com=13, min_periods=14).mean()
+        rs    = gain / loss.replace(0, float("nan"))
+        rsi_val = round(float((100 - 100 / (1 + rs)).iloc[-1]), 1) if not loss.empty else 50
+
+        # 20-day volatility (annualised)
         daily_ret  = close.pct_change().dropna()
         volatility = round(float(daily_ret.tail(20).std()) * (252 ** 0.5) * 100, 1) if len(daily_ret) >= 20 else None
-    except Exception:
-        volatility = None
 
-    return {
-        "price":       _safe(round(price, 2)),
-        "change_pct":  _safe(change_pct, 0),
-        "ret_1d":      _safe(change_pct, 0),
-        "ret_5d":      _safe(pct_return(5)),
-        "ret_20d":     _safe(pct_return(20)),
-        "ret_50d":     _safe(pct_return(50)),
-        "sma20":       _safe(sma20),
-        "sma50":       _safe(sma50),
-        "above_sma20": (price > sma20) if (_safe(sma20) is not None) else None,
-        "above_sma50": (price > sma50) if (_safe(sma50) is not None) else None,
-        "rsi":         _safe(rsi_val, 50),
-        "volatility":  _safe(volatility),
-    }
+        return {
+            "price":       round(price, 2) if price else None,
+            "change_pct":  change_pct,
+            "ret_1d":      change_pct,
+            "ret_5d":      pct_return(5),
+            "ret_20d":     pct_return(20),
+            "ret_50d":     pct_return(50),
+            "sma20":       sma20,
+            "sma50":       sma50,
+            "above_sma20": price > sma20 if price and sma20 else None,
+            "above_sma50": price > sma50 if price and sma50 else None,
+            "rsi":         rsi_val,
+            "volatility":  volatility,
+        }
+    except Exception as e:
+        logger.debug(f"Fetch failed for {ticker}: {e}")
+        return None
 
 
 def fetch_market_health() -> dict:
@@ -109,46 +101,35 @@ def fetch_market_health() -> dict:
     Fetch all market indicators and compute overall health score,
     trajectory, regime, and plain-English reasoning.
     """
-    logger.info("Fetching market health indicators via stooq.com (parallel)…")
+    logger.info("Fetching market health indicators…")
 
-    # ── Fetch all tickers in parallel (avoids sequential HTTP timeout) ────────
-    _all_tickers = [
-        "SPY", "QQQ", "DIA", "IWM",
-        "^VIX", "^TNX", "DX-Y.NYB",
-        "GLD", "USO",
-        "XLK", "XLF", "XLV", "XLE", "XLY", "XLU", "XLI", "XLB",
-    ]
+    # ── Core indices ──────────────────────────────────────────────────────────
+    spy  = _fetch("SPY")    # S&P 500
+    qqq  = _fetch("QQQ")    # Nasdaq 100
+    dia  = _fetch("DIA")    # Dow Jones
+    iwm  = _fetch("IWM")    # Russell 2000 (small-cap, risk appetite)
 
-    _results: dict[str, Optional[dict]] = {}
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        future_map = {ex.submit(_fetch, t): t for t in _all_tickers}
-        for fut in as_completed(future_map):
-            sym = future_map[fut]
-            try:
-                _results[sym] = fut.result()
-            except Exception as e:
-                logger.warning(f"Parallel fetch failed for {sym}: {e}")
-                _results[sym] = None
+    # ── Fear & volatility ─────────────────────────────────────────────────────
+    vix  = _fetch("^VIX")   # CBOE Volatility Index
 
-    spy = _results.get("SPY")
-    qqq = _results.get("QQQ")
-    dia = _results.get("DIA")
-    iwm = _results.get("IWM")
-    vix = _results.get("^VIX")
-    tnx = _results.get("^TNX")
-    dxy = _results.get("DX-Y.NYB")
-    gld = _results.get("GLD")
-    uso = _results.get("USO")
+    # ── Macro / rates ─────────────────────────────────────────────────────────
+    tnx  = _fetch("^TNX")   # 10-year Treasury yield
+    dxy  = _fetch("DX-Y.NYB") # US Dollar index
 
+    # ── Risk assets / commodities ─────────────────────────────────────────────
+    gld  = _fetch("GLD")    # Gold (safe haven)
+    uso  = _fetch("USO")    # Oil
+
+    # ── Sector ETFs ───────────────────────────────────────────────────────────
     sectors = {
-        "Technology":    _results.get("XLK"),
-        "Financials":    _results.get("XLF"),
-        "Healthcare":    _results.get("XLV"),
-        "Energy":        _results.get("XLE"),
-        "Consumer Disc": _results.get("XLY"),
-        "Utilities":     _results.get("XLU"),
-        "Industrials":   _results.get("XLI"),
-        "Materials":     _results.get("XLB"),
+        "Technology":    _fetch("XLK"),
+        "Financials":    _fetch("XLF"),
+        "Healthcare":    _fetch("XLV"),
+        "Energy":        _fetch("XLE"),
+        "Consumer Disc": _fetch("XLY"),
+        "Utilities":     _fetch("XLU"),
+        "Industrials":   _fetch("XLI"),
+        "Materials":     _fetch("XLB"),
     }
 
     # ── Compute health score ──────────────────────────────────────────────────

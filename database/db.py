@@ -63,62 +63,6 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_mentions_ticker  ON mentions(ticker);
             CREATE INDEX IF NOT EXISTS idx_mentions_created ON mentions(created_at);
             CREATE INDEX IF NOT EXISTS idx_holdings_ticker  ON portfolio_holdings(ticker);
-
-            -- ── Paper trading ────────────────────────────────────────────────
-
-            CREATE TABLE IF NOT EXISTS paper_account (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                cash            REAL    NOT NULL DEFAULT 100000.0,
-                total_invested  REAL    NOT NULL DEFAULT 0.0,
-                updated_at      TEXT    NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS paper_positions (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticker      TEXT    NOT NULL UNIQUE,
-                shares      REAL    NOT NULL,
-                avg_cost    REAL    NOT NULL,
-                opened_at   TEXT    NOT NULL,
-                updated_at  TEXT    NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS paper_trades (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticker          TEXT    NOT NULL,
-                action          TEXT    NOT NULL,
-                shares          REAL    NOT NULL,
-                price           REAL    NOT NULL,
-                total_value     REAL    NOT NULL,
-                signal_score    REAL,
-                signal_reason   TEXT,
-                mode            TEXT    NOT NULL,
-                status          TEXT    NOT NULL,
-                pnl             REAL,
-                created_at      TEXT    NOT NULL,
-                executed_at     TEXT
-            );
-
-            -- ── SEC filings ──────────────────────────────────────────────────
-
-            CREATE TABLE IF NOT EXISTS sec_filings (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticker          TEXT    NOT NULL,
-                cik             TEXT    NOT NULL,
-                form_type       TEXT    NOT NULL,
-                accession       TEXT    NOT NULL UNIQUE,
-                filed_date      TEXT    NOT NULL,
-                title           TEXT,
-                summary         TEXT,
-                sentiment_score REAL,
-                sentiment_label TEXT,
-                url             TEXT,
-                fetched_at      TEXT    NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_paper_trades_ticker  ON paper_trades(ticker);
-            CREATE INDEX IF NOT EXISTS idx_paper_trades_status  ON paper_trades(status);
-            CREATE INDEX IF NOT EXISTS idx_sec_filings_ticker   ON sec_filings(ticker);
-            CREATE INDEX IF NOT EXISTS idx_sec_filings_form     ON sec_filings(form_type);
         """)
     logger.info("Database initialised.")
 
@@ -206,38 +150,3 @@ def portfolio_delete(ticker: str) -> bool:
     with get_connection() as conn:
         cur = conn.execute("DELETE FROM portfolio_holdings WHERE ticker=?", (ticker,))
     return cur.rowcount > 0
-
-
-# ─── SEC Filings ──────────────────────────────────────────────────────────────
-
-def sec_upsert_filing(filing: dict):
-    """Insert a SEC filing, ignore if accession already exists."""
-    with get_connection() as conn:
-        conn.execute("""
-            INSERT OR IGNORE INTO sec_filings
-                (ticker, cik, form_type, accession, filed_date, title,
-                 summary, sentiment_score, sentiment_label, url, fetched_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-            filing["ticker"], filing["cik"], filing["form_type"],
-            filing["accession"], filing["filed_date"], filing.get("title"),
-            filing.get("summary"), filing.get("sentiment_score"),
-            filing.get("sentiment_label"), filing.get("url"), filing["fetched_at"],
-        ))
-
-
-def sec_get_filings(ticker: str = None, form_type: str = None, limit: int = 50) -> list[dict]:
-    """Fetch stored SEC filings, optionally filtered by ticker and/or form type."""
-    query  = "SELECT * FROM sec_filings WHERE 1=1"
-    params = []
-    if ticker:
-        query += " AND ticker=?"
-        params.append(ticker.upper())
-    if form_type:
-        query += " AND form_type=?"
-        params.append(form_type.upper())
-    query += " ORDER BY filed_date DESC LIMIT ?"
-    params.append(limit)
-    with get_connection() as conn:
-        rows = conn.execute(query, params).fetchall()
-    return [dict(r) for r in rows]

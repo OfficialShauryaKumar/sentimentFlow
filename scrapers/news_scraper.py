@@ -5,6 +5,9 @@ scrapers/news_scraper.py — Scrapes NewsAPI + RSS feeds for stock mentions
 from datetime import datetime, timezone
 from typing import Optional
 import feedparser
+import requests
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote_plus
 
 import config
 from scrapers.base_scraper import (
@@ -12,6 +15,51 @@ from scrapers.base_scraper import (
 )
 
 logger = get_logger("news")
+
+_UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
+
+
+# ─── Google News (per-ticker) ─────────────────────────────────────────────────
+
+def _google_news_for(ticker: str) -> list[dict]:
+    """Recent Google News headlines for one ticker (tagged to that ticker)."""
+    url = ("https://news.google.com/rss/search?q="
+           f"{quote_plus(ticker + ' stock')}+when:2d&hl=en-US&gl=US&ceid=US:en")
+    out = []
+    try:
+        r = requests.get(url, timeout=8, headers=_UA)
+        feed = feedparser.parse(r.content)
+        import calendar
+        for entry in feed.entries[:config.MAX_POSTS]:
+            title = entry.get("title", "")
+            pub = entry.get("published_parsed")
+            pub_dt = (datetime.fromtimestamp(calendar.timegm(pub), tz=timezone.utc)
+                      if pub else datetime.now(timezone.utc))
+            out.append({
+                "source":      "Google News",
+                "source_type": "rss",
+                "ticker":      ticker,
+                "title":       clean_text(title[:200]),
+                "body":        "",
+                "score":       None,
+                "comments":    None,
+                "traction":    round(recency_score(age_hours(pub_dt), half_life=12.0), 4),
+                "url":         entry.get("link", ""),
+                "created_at":  pub_dt.isoformat(),
+                "raw_text":    clean_text(title[:1000]),
+            })
+    except Exception as e:
+        logger.warning(f"Google News [{ticker}] error: {e}")
+    return out
+
+
+def scrape_google_news(watchlist: list[str] = None) -> list[dict]:
+    watchlist = watchlist or config.WATCHLIST
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        results = [m for batch in ex.map(_google_news_for, watchlist) for m in batch]
+    logger.info(f"Google News: {len(results)} mentions")
+    return results
 
 
 # ─── NewsAPI ──────────────────────────────────────────────────────────────────
@@ -96,7 +144,9 @@ def scrape_rss(watchlist: list[str] = None) -> list[dict]:
 
     for feed_name, feed_url in config.RSS_FEEDS.items():
         try:
-            feed = feedparser.parse(feed_url)
+            # Fetch with a timeout — feedparser.parse(url) can hang forever.
+            _resp = requests.get(feed_url, timeout=8, headers=_UA)
+            feed = feedparser.parse(_resp.content)
 
             for entry in feed.entries[:config.MAX_POSTS]:
                 title   = entry.get("title", "")
@@ -150,4 +200,5 @@ def scrape_news(watchlist: list[str] = None) -> list[dict]:
     """Run both NewsAPI and RSS scrapers and merge results."""
     newsapi_results = scrape_newsapi(watchlist)
     rss_results     = scrape_rss(watchlist)
-    return newsapi_results + rss_results
+    google_results  = scrape_google_news(watchlist)
+    return newsapi_results + rss_results + google_results

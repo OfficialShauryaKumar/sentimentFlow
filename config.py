@@ -54,12 +54,11 @@ REDDIT_LIMIT = MAX_POSTS
 # ─── News Sources (RSS) ───────────────────────────────────────────────────────
 
 RSS_FEEDS = {
-    "Reuters Business":  "https://feeds.reuters.com/reuters/businessNews",
-    "MarketWatch":       "http://feeds.marketwatch.com/marketwatch/topstories/",
-    "Yahoo Finance":     "https://feeds.finance.yahoo.com/rss/2.0/headline",
+    "MarketWatch":       "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+    "CNBC Markets":      "https://www.cnbc.com/id/15839069/device/rss/rss.html",
+    "Yahoo Finance":     "https://feeds.finance.yahoo.com/rss/2.0/headline?s=" + ",".join(WATCHLIST) + "&region=US&lang=en-US",
     "Seeking Alpha":     "https://seekingalpha.com/market_currents.xml",
-    "Investopedia":      "https://www.investopedia.com/feeds/rss.aspx",
-    "The Motley Fool":   "https://www.fool.com/feeds/index.aspx",
+    "Investing.com":     "https://www.investing.com/rss/news_25.rss",
 }
 
 # ─── Sentiment Thresholds ─────────────────────────────────────────────────────

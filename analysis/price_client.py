@@ -90,7 +90,68 @@ def _download(symbol: str, rng: str) -> Optional[pd.DataFrame]:
         except Exception as e:
             last_error[symbol] = f"{host}: {type(e).__name__}: {e}"
             continue
+    # Fallback: Nasdaq public API (works when Yahoo rate-limits cloud IPs)
+    df = _download_nasdaq(symbol)
+    if df is not None:
+        last_error.pop(symbol, None)
+        return df
     logger.warning(f"Price fetch failed for {symbol}: {last_error.get(symbol)}")
+    return None
+
+
+_ETFS = {"SPY", "QQQ", "DIA", "IWM", "GLD", "USO",
+         "XLK", "XLF", "XLV", "XLE", "XLY", "XLU", "XLI", "XLB"}
+_NASDAQ_HEADERS = {
+    "User-Agent": _HEADERS["User-Agent"],
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Origin": "https://www.nasdaq.com",
+    "Referer": "https://www.nasdaq.com/",
+}
+
+
+def _num(v):
+    try:
+        return float(str(v).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _download_nasdaq(symbol: str) -> Optional[pd.DataFrame]:
+    if symbol.startswith("^") or "." in symbol or "=" in symbol:
+        return None  # indices/FX not supported here
+    classes = ["etf", "stocks"] if symbol in _ETFS else ["stocks", "etf"]
+    start = (pd.Timestamp.now() - pd.Timedelta(days=380)).strftime("%Y-%m-%d")
+    for ac in classes:
+        url = f"https://api.nasdaq.com/api/quote/{symbol}/historical"
+        try:
+            r = requests.get(url, params={"assetclass": ac, "fromdate": start, "limit": 400},
+                             headers=_NASDAQ_HEADERS, timeout=_TIMEOUT)
+            if r.status_code != 200:
+                last_error[symbol] = f"nasdaq HTTP {r.status_code}"
+                continue
+            rows = ((((r.json() or {}).get("data") or {}).get("tradesTable") or {}).get("rows")) or []
+            if not rows:
+                last_error[symbol] = f"nasdaq ({ac}): no rows"
+                continue
+            df = pd.DataFrame({
+                "Open":   [_num(x.get("open"))   for x in rows],
+                "High":   [_num(x.get("high"))   for x in rows],
+                "Low":    [_num(x.get("low"))    for x in rows],
+                "Close":  [_num(x.get("close"))  for x in rows],
+                "Volume": [_num(x.get("volume")) or 0 for x in rows],
+            }, index=pd.to_datetime([x.get("date") for x in rows], format="%m/%d/%Y", errors="coerce"))
+            df = df.astype(float)
+            df.index.name = "Date"
+            df = df[df.index.notna()].sort_index()
+            df = df.dropna(subset=["Close"])
+            df = df[df["Close"] > 0]
+            for c in ("Open", "High", "Low"):
+                df[c] = df[c].fillna(df["Close"])
+            if not df.empty:
+                return df
+        except Exception as e:
+            last_error[symbol] = f"nasdaq: {type(e).__name__}: {e}"
     return None
 
 

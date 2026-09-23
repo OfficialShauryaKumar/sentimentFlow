@@ -149,8 +149,22 @@ def _start_bg_refresh():
 
 def _run_analysis() -> dict:
     logger.info("Starting full scrape + analysis…")
-    reddit = scrape_reddit()
-    news   = scrape_news()
+    # Run scrapers in parallel with a hard time budget so one hung feed or
+    # blocked source can't stall the whole refresh forever.
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FTE
+    ex = ThreadPoolExecutor(max_workers=2)
+    f_reddit, f_news = ex.submit(scrape_reddit), ex.submit(scrape_news)
+    def _collect(fut, name, budget):
+        try:
+            return fut.result(timeout=budget) or []
+        except _FTE:
+            logger.warning(f"{name} scrape exceeded {budget}s — skipping it this run.")
+        except Exception as e:
+            logger.warning(f"{name} scrape failed: {e}")
+        return []
+    reddit = _collect(f_reddit, "Reddit", 60)
+    news   = _collect(f_news, "News", 20)   # already waited ~60s above in worst case
+    ex.shutdown(wait=False)
     all_m  = reddit + news
     logger.info(f"Total mentions: {len(all_m)}")
     recs   = build_recommendations(all_m)

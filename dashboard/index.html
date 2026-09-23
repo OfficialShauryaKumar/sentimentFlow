@@ -1036,8 +1036,11 @@ async function ptRunCycle(){
     if(j.ok){
       const auto=j.auto_executed?.length||0;
       const q=j.queued_for_approval?.length||0;
-      alert(`Cycle complete!\n✅ Auto-executed: ${auto} trades\n⏳ Queued for approval: ${q} trades`);
+      const skip=j.skipped?.length||0;
+      alert(`Cycle complete!\n✅ Auto-executed: ${auto} trades\n⏳ Queued for approval: ${q} trades\n⏭ Skipped: ${skip}`);
       ptLoadAll();
+    }else if(r.status===400){
+      alert('No signal data yet.\n\nClick the Refresh button (top right) first to load signals, then run the cycle.');
     }else{alert('Error: '+(j.error||'Unknown'));}
   }catch(e){alert('Request failed: '+e);}
   btn.classList.remove('busy');btn.textContent='▶ Run Trading Cycle';

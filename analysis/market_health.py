@@ -18,12 +18,23 @@ Produces:
 """
 
 import logging
+import math
 from typing import Optional
 from datetime import datetime, timezone
 
-import numpy as np
-
 logger = logging.getLogger("market_health")
+
+
+def _safe(val, default=None):
+    """Return default if val is NaN, Inf, or None — keeps JSON serializable."""
+    if val is None:
+        return default
+    try:
+        if math.isnan(val) or math.isinf(val):
+            return default
+    except (TypeError, ValueError):
+        pass
+    return val
 
 # Use stooq.com for price data — Yahoo Finance blocks cloud hosting IPs.
 from analysis.price_client import fetch_history
@@ -77,18 +88,18 @@ def _fetch(ticker: str) -> Optional[dict]:
         volatility = None
 
     return {
-        "price":       round(price, 2),
-        "change_pct":  change_pct,
-        "ret_1d":      change_pct,
-        "ret_5d":      pct_return(5),
-        "ret_20d":     pct_return(20),
-        "ret_50d":     pct_return(50),
-        "sma20":       sma20,
-        "sma50":       sma50,
-        "above_sma20": price > sma20 if sma20 else None,
-        "above_sma50": price > sma50 if sma50 else None,
-        "rsi":         rsi_val,
-        "volatility":  volatility,
+        "price":       _safe(round(price, 2)),
+        "change_pct":  _safe(change_pct, 0),
+        "ret_1d":      _safe(change_pct, 0),
+        "ret_5d":      _safe(pct_return(5)),
+        "ret_20d":     _safe(pct_return(20)),
+        "ret_50d":     _safe(pct_return(50)),
+        "sma20":       _safe(sma20),
+        "sma50":       _safe(sma50),
+        "above_sma20": (price > sma20) if (_safe(sma20) is not None) else None,
+        "above_sma50": (price > sma50) if (_safe(sma50) is not None) else None,
+        "rsi":         _safe(rsi_val, 50),
+        "volatility":  _safe(volatility),
     }
 
 

@@ -318,13 +318,19 @@ def paper_auto_run():
 @app.route("/api/paper/account", methods=["GET"])
 def paper_account():
     """GET account summary: cash, positions value, total return, P&L."""
-    return jsonify({"ok": True, "account": pt.get_account()})
+    try:
+        return jsonify({"ok": True, "account": pt.get_account()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/paper/positions", methods=["GET"])
 def paper_positions():
     """GET all open paper positions with live prices."""
-    return jsonify({"ok": True, "positions": pt.get_positions()})
+    try:
+        return jsonify({"ok": True, "positions": pt.get_positions()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/paper/trades", methods=["GET"])
@@ -366,15 +372,23 @@ def paper_run():
     """
     Run a full paper trading cycle against current sentiment signals.
     Auto-executes high-conviction (>=4★), queues medium-conviction (3★).
+    Uses cached signals only — won't trigger a full scrape (which can
+    timeout on Render's 30s limit). Hit Refresh first to load signals.
     """
-    # Get latest recommendations (use cache if available)
-    data = cache_get("analysis_v2")
-    if data is None:
-        data = _run_analysis()
-        cache_set("analysis_v2", data)
+    try:
+        data = cache_get("analysis_v2")
+        if data is None:
+            return jsonify({
+                "ok": False,
+                "error": "No signal data loaded yet. Click the main Refresh button first to scrape signals, then run the cycle."
+            }), 400
 
-    result = pt.run_paper_trading_cycle(data.get("recommendations", []))
-    return jsonify({"ok": True, **result})
+        recs = data.get("recommendations", [])
+        result = pt.run_paper_trading_cycle(recs)
+        return jsonify({"ok": True, **result})
+    except Exception as e:
+        logger.error(f"Paper trading run failed: {e}", exc_info=True)
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/paper/reset", methods=["POST"])

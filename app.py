@@ -116,14 +116,21 @@ init_db()
 _refresh_lock    = threading.Lock()
 _refresh_running = False   # True while _run_analysis is in progress
 _refresh_error   = None    # last background failure message
+_latest_analysis = None    # latest finished result (kept even when CACHE_TTL_MINUTES=0)
+
+
+def _get_analysis():
+    """Latest analysis: in-memory result first, then the DB cache."""
+    return _latest_analysis or cache_get("analysis_v2")
 
 
 def _run_analysis_bg():
     """Run analysis in a background thread and cache the result."""
-    global _refresh_running, _refresh_error
+    global _refresh_running, _refresh_error, _latest_analysis
     try:
         t0 = datetime.now(timezone.utc)
         data = _run_analysis()
+        _latest_analysis = data
         cache_set("analysis_v2", data)
         _refresh_error = None
         logger.info(f"Background refresh complete in {(datetime.now(timezone.utc)-t0).total_seconds():.1f}s.")
@@ -193,8 +200,10 @@ def index():
 @app.route("/api/recommendations", methods=["GET"])
 def get_recommendations():
     force = request.args.get("refresh", "false").lower() == "true"
+    global _latest_analysis
     if force:
         cache_invalidate("analysis_v2")
+        _latest_analysis = None
         started = _start_bg_refresh()
         # Return immediately so Render doesn't time out.
         # Frontend will poll this endpoint until refreshing=false.
@@ -213,7 +222,7 @@ def get_recommendations():
         })
 
     # Normal (non-force) read: return cached data if available, else start bg refresh
-    data = cache_get("analysis_v2")
+    data = _get_analysis()
     if data is None:
         if _refresh_error and not _refresh_running:
             err, _ = _refresh_error, None
@@ -235,7 +244,7 @@ def get_recommendations():
 
     return jsonify({
         "ok":             True,
-        "refreshing":     _refresh_running,
+        "refreshing":     False,   # have data — show it
         "recommendations":data["recommendations"],
         "total_mentions": data["total_mentions"],
         "reddit_mentions":data["reddit_mentions"],
@@ -263,7 +272,9 @@ def debug_price():
 
 @app.route("/api/refresh", methods=["POST"])
 def force_refresh():
+    global _latest_analysis
     cache_invalidate("analysis_v2")
+    _latest_analysis = None
     started = _start_bg_refresh()
     return jsonify({"ok": True, "refreshing": True, "started": started})
 
@@ -271,7 +282,7 @@ def force_refresh():
 @app.route("/api/ticker/<ticker>", methods=["GET"])
 def get_ticker(ticker: str):
     ticker = ticker.upper()
-    data   = cache_get("analysis_v2")
+    data   = _get_analysis()
     if data is None:
         _start_bg_refresh()
         return jsonify({"ok": False, "error": "No data yet — refresh in progress."}), 503
@@ -345,7 +356,7 @@ def analyze():
             "message": "No holdings saved. Add positions via POST /api/portfolio/holdings"
         })
 
-    data = cache_get("analysis_v2")
+    data = _get_analysis()
     if data is None:
         data = _run_analysis()
         cache_set("analysis_v2", data)
@@ -488,7 +499,7 @@ def paper_run():
     timeout on Render's 30s limit). Hit Refresh first to load signals.
     """
     try:
-        data = cache_get("analysis_v2")
+        data = _get_analysis()
         if data is None:
             return jsonify({
                 "ok": False,

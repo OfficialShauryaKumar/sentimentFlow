@@ -24,37 +24,36 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger("market_health")
 
-try:
-    import yfinance as yf
-    import numpy as np
-    _ok = True
-except ImportError:
-    _ok = False
-    logger.warning("yfinance not installed — market health unavailable.")
+import math
+from concurrent.futures import ThreadPoolExecutor
 
-# Throttled yfinance client (avoids 429 rate-limit errors).
-from analysis.yf_client import get_ticker, call_with_retry, is_circuit_open
+# Price data from Nasdaq / FRED (Yahoo blocks Render's servers).
+from analysis.price_client import fetch_history
+
+
+def _clean(o):
+    """Replace NaN/Inf with None so the response is valid JSON."""
+    if isinstance(o, float):
+        return None if (math.isnan(o) or math.isinf(o)) else o
+    if isinstance(o, dict):
+        return {k: _clean(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_clean(v) for v in o]
+    return o
 
 
 def _fetch(ticker: str) -> Optional[dict]:
-    """Fetch quote + recent history for a single ticker."""
-    if not _ok or is_circuit_open():
-        return None
+    """Fetch recent daily history for a single ticker and compute stats."""
     try:
-        t = get_ticker(ticker)
-        if t is None:
-            return None  # yfinance disabled or circuit open
-        fi   = call_with_retry(lambda: t.fast_info)
-        hist = call_with_retry(lambda: t.history(period="3mo", interval="1d"))
-
-        if fi is None or hist is None or hist.empty:
+        hist = fetch_history(ticker, days=120)
+        if hist is None or hist.empty:
             return None
 
-        price      = float(fi.last_price)      if fi.last_price      else None
-        prev_close = float(fi.previous_close)  if fi.previous_close  else None
-        change_pct = round((price - prev_close) / prev_close * 100, 2) if price and prev_close else 0
+        close      = hist["Close"].dropna()
+        price      = float(close.iloc[-1])
+        prev_close = float(close.iloc[-2]) if len(close) >= 2 else price
+        change_pct = round((price - prev_close) / prev_close * 100, 2) if prev_close else 0
 
-        close = hist["Close"]
 
         # 1-day, 5-day, 20-day, 50-day returns
         def pct_return(days):
@@ -77,7 +76,7 @@ def _fetch(ticker: str) -> Optional[dict]:
         daily_ret  = close.pct_change().dropna()
         volatility = round(float(daily_ret.tail(20).std()) * (252 ** 0.5) * 100, 1) if len(daily_ret) >= 20 else None
 
-        return {
+        return _clean({
             "price":       round(price, 2) if price else None,
             "change_pct":  change_pct,
             "ret_1d":      change_pct,
@@ -90,7 +89,7 @@ def _fetch(ticker: str) -> Optional[dict]:
             "above_sma50": price > sma50 if price and sma50 else None,
             "rsi":         rsi_val,
             "volatility":  volatility,
-        }
+        })
     except Exception as e:
         logger.debug(f"Fetch failed for {ticker}: {e}")
         return None
@@ -103,33 +102,24 @@ def fetch_market_health() -> dict:
     """
     logger.info("Fetching market health indicators…")
 
-    # ── Core indices ──────────────────────────────────────────────────────────
-    spy  = _fetch("SPY")    # S&P 500
-    qqq  = _fetch("QQQ")    # Nasdaq 100
-    dia  = _fetch("DIA")    # Dow Jones
-    iwm  = _fetch("IWM")    # Russell 2000 (small-cap, risk appetite)
+    symbols = ["SPY", "QQQ", "DIA", "IWM", "^VIX", "^TNX", "DX-Y.NYB", "GLD", "USO",
+               "XLK", "XLF", "XLV", "XLE", "XLY", "XLU", "XLI", "XLB"]
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        got = dict(zip(symbols, ex.map(_fetch, symbols)))
 
-    # ── Fear & volatility ─────────────────────────────────────────────────────
-    vix  = _fetch("^VIX")   # CBOE Volatility Index
+    spy, qqq, dia, iwm = got["SPY"], got["QQQ"], got["DIA"], got["IWM"]
+    vix, tnx, dxy      = got["^VIX"], got["^TNX"], got["DX-Y.NYB"]
+    gld, uso           = got["GLD"], got["USO"]
 
-    # ── Macro / rates ─────────────────────────────────────────────────────────
-    tnx  = _fetch("^TNX")   # 10-year Treasury yield
-    dxy  = _fetch("DX-Y.NYB") # US Dollar index
-
-    # ── Risk assets / commodities ─────────────────────────────────────────────
-    gld  = _fetch("GLD")    # Gold (safe haven)
-    uso  = _fetch("USO")    # Oil
-
-    # ── Sector ETFs ───────────────────────────────────────────────────────────
     sectors = {
-        "Technology":    _fetch("XLK"),
-        "Financials":    _fetch("XLF"),
-        "Healthcare":    _fetch("XLV"),
-        "Energy":        _fetch("XLE"),
-        "Consumer Disc": _fetch("XLY"),
-        "Utilities":     _fetch("XLU"),
-        "Industrials":   _fetch("XLI"),
-        "Materials":     _fetch("XLB"),
+        "Technology":    got["XLK"],
+        "Financials":    got["XLF"],
+        "Healthcare":    got["XLV"],
+        "Energy":        got["XLE"],
+        "Consumer Disc": got["XLY"],
+        "Utilities":     got["XLU"],
+        "Industrials":   got["XLI"],
+        "Materials":     got["XLB"],
     }
 
     # ── Compute health score ──────────────────────────────────────────────────
@@ -312,7 +302,7 @@ def fetch_market_health() -> dict:
     leaders  = sector_data[:3]
     laggards = sector_data[-3:][::-1] if len(sector_data) >= 3 else []
 
-    return {
+    return _clean({
         "health_score":   final_score,
         "trajectory":     trajectory,
         "traj_strength":  traj_strength,
@@ -337,4 +327,4 @@ def fetch_market_health() -> dict:
             "uso":  uso,
         },
         "fetched_at": datetime.now(timezone.utc).isoformat(),
-    }
+    })

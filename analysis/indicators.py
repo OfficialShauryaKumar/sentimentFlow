@@ -19,29 +19,20 @@ from typing import Optional
 
 logger = logging.getLogger("indicators")
 
-try:
-    import yfinance as yf
-    import pandas as pd
-    _yf_ok = True
-except ImportError:
-    _yf_ok = False
-    logger.warning("yfinance/pandas not installed — technical indicators unavailable.")
+import pandas as pd
 
-# Throttled yfinance client (avoids 429 rate-limit errors).
-from analysis.yf_client import get_ticker, call_with_retry
+# Prices from Nasdaq (Yahoo blocks Render's servers) — see analysis/price_client.py
+from analysis.price_client import fetch_history as _price_history
+
+_PERIOD_DAYS = {"1mo": 35, "3mo": 95, "6mo": 185, "1y": 370}
 
 
 # ─── Data fetch ──────────────────────────────────────────────────────────────
 
 def fetch_history(ticker: str, period: str = "6mo", interval: str = "1d") -> Optional["pd.DataFrame"]:
-    """Fetch OHLCV history. Returns DataFrame or None on failure."""
-    if not _yf_ok:
-        return None
+    """Fetch daily OHLCV history. Returns DataFrame or None on failure."""
     try:
-        t = get_ticker(ticker)
-        if t is None:
-            return None  # yfinance disabled or circuit breaker open
-        hist = call_with_retry(lambda: t.history(period=period, interval=interval))
+        hist = _price_history(ticker, days=_PERIOD_DAYS.get(period, 185))
         if hist is None or hist.empty or len(hist) < 20:
             return None
         return hist
@@ -51,40 +42,24 @@ def fetch_history(ticker: str, period: str = "6mo", interval: str = "1d") -> Opt
 
 
 def fetch_quote(ticker: str) -> Optional[dict]:
-    """Fetch current price, volume, and basic info."""
-    if not _yf_ok:
-        return None
+    """Current price, change, 52-week range and avg volume from daily history."""
     try:
-        t = get_ticker(ticker)
-        if t is None:
-            return None  # yfinance disabled or circuit breaker open
-        # fast_info is lazy — touching one field forces the network call;
-        # wrap it so we retry on 429.
-        fi = call_with_retry(lambda: t.fast_info)
-        if fi is None:
+        hist = _price_history(ticker, days=370)
+        if hist is None or hist.empty:
             return None
-        # Force eager fetch of the fields we need (also retried).
-        snapshot = call_with_retry(lambda: {
-            "last_price":                 fi.last_price,
-            "previous_close":             fi.previous_close,
-            "three_month_average_volume": fi.three_month_average_volume,
-            "year_high":                  fi.year_high,
-            "year_low":                   fi.year_low,
-            "market_cap":                 fi.market_cap,
-            "currency":                   fi.currency,
-        })
-        last  = snapshot["last_price"]
-        prev  = snapshot["previous_close"]
+        close = hist["Close"]
+        last  = float(close.iloc[-1])
+        prev  = float(close.iloc[-2]) if len(close) >= 2 else last
+        vol   = hist["Volume"].tail(63).mean()
         return {
-            "price":          round(float(last), 2)  if last else None,
-            "prev_close":     round(float(prev), 2)  if prev else None,
-            "change_pct":     round((last - prev) / prev * 100, 2)
-                              if last and prev else None,
-            "volume":         int(snapshot["three_month_average_volume"]) if snapshot["three_month_average_volume"] else None,
-            "week52_high":    round(float(snapshot["year_high"]), 2)  if snapshot["year_high"]  else None,
-            "week52_low":     round(float(snapshot["year_low"]), 2)   if snapshot["year_low"]   else None,
-            "market_cap":     int(snapshot["market_cap"])             if snapshot["market_cap"] else None,
-            "currency":       snapshot["currency"] or "USD",
+            "price":       round(last, 2),
+            "prev_close":  round(prev, 2),
+            "change_pct":  round((last - prev) / prev * 100, 2) if prev else None,
+            "volume":      int(vol) if vol and vol > 0 else None,
+            "week52_high": round(float(hist["High"].tail(252).max()), 2),
+            "week52_low":  round(float(hist["Low"].tail(252).min()), 2),
+            "market_cap":  None,
+            "currency":    "USD",
         }
     except Exception as e:
         logger.debug(f"Quote fetch failed for {ticker}: {e}")

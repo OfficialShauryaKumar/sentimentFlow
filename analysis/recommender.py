@@ -206,13 +206,24 @@ def build_recommendations(mentions: list[dict]) -> list[dict]:
     logger.info(f"Fetching data for {len(filtered)} tickers…")
     results = []
 
+    # Fetch prices/technicals for all tickers in parallel (much faster).
+    from concurrent.futures import ThreadPoolExecutor
+    def _tech(tk):
+        try:
+            return compute_technicals(tk)
+        except Exception as e:
+            logger.warning(f"Technical error for {tk}: {e}")
+            return None
+    with ThreadPoolExecutor(max_workers=6) as _ex:
+        _tech_map = dict(zip(filtered.keys(), _ex.map(_tech, list(filtered.keys()))))
+
     for ticker, data in filtered.items():
         sent_score = data["composite_score"]
 
         # ── Technical indicators (price history, RSI, MACD, etc.) ──────────
         tech = None
         try:
-            tech = compute_technicals(ticker)
+            tech = _tech_map.get(ticker)
             if tech:
                 data["price"]      = tech.get("price")
                 data["change_pct"] = tech.get("change_pct")

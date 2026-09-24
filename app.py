@@ -89,6 +89,22 @@ def _archive_snapshot(recs: list[dict]) -> None:
 
 
 app = Flask(__name__, static_folder="dashboard")
+
+# NaN/Inf aren't valid JSON (the browser can't parse them) — send null instead.
+import math as _math
+from flask.json.provider import DefaultJSONProvider as _DJP
+def _clean_nan(o):
+    if isinstance(o, float):
+        return None if (_math.isnan(o) or _math.isinf(o)) else o
+    if isinstance(o, dict):
+        return {k: _clean_nan(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_clean_nan(v) for v in o]
+    return o
+class _SafeJSON(_DJP):
+    def dumps(self, obj, **kw):
+        return super().dumps(_clean_nan(obj), **kw)
+app.json = _SafeJSON(app)
 CORS(app)
 init_db()
 

@@ -3,9 +3,12 @@ app.py — Flask REST API for SentimentFlow
 Includes persistent portfolio management endpoints.
 """
 import csv
+import hmac
 import logging
 import os
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
+from functools import wraps
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -105,8 +108,63 @@ class _SafeJSON(_DJP):
     def dumps(self, obj, **kw):
         return super().dumps(_clean_nan(obj), **kw)
 app.json = _SafeJSON(app)
-CORS(app)
+
+# The dashboard is served from this same origin, so cross-origin access is off
+# by default. Set CORS_ORIGINS="https://a.example,https://b.example" to allow others.
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    CORS(app, origins=_cors_origins)
+
 init_db()
+
+if not config.ADMIN_PASSWORD:
+    logger.warning("ADMIN_PASSWORD is not set: anyone who can reach this server can "
+                   "change holdings and force a re-scrape. Set it on public deployments.")
+
+
+# ── Owner password ────────────────────────────────────────────────────────────
+
+def _is_owner() -> bool:
+    """True when no password is configured, or the request carries the right one."""
+    if not config.ADMIN_PASSWORD:
+        return True
+    header = request.headers.get("Authorization", "")
+    supplied = header[len("Bearer "):] if header.startswith("Bearer ") else ""
+    return hmac.compare_digest(supplied.encode(), config.ADMIN_PASSWORD.encode())
+
+
+def _owner_required():
+    return jsonify({"ok": False, "error": "Owner password required"}), 401
+
+
+def owner_only(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        return view(*args, **kwargs) if _is_owner() else _owner_required()
+    return wrapper
+
+
+def _wants_refresh() -> bool:
+    return request.args.get("refresh", "false").lower() == "true"
+
+
+# ── Analysis cache ────────────────────────────────────────────────────────────
+
+def _cache_minutes() -> int:
+    if config.ADMIN_PASSWORD:
+        return max(config.CACHE_TTL_MINUTES, config.PUBLIC_CACHE_MINUTES)
+    return config.CACHE_TTL_MINUTES
+
+
+def _get_analysis(force: bool = False) -> dict:
+    """Latest analysis; re-scrapes when the cache is stale or `force` is set."""
+    if force:
+        cache_invalidate("analysis_v2")
+    data = cache_get("analysis_v2", _cache_minutes())
+    if data is None:
+        data = _run_analysis()
+        cache_set("analysis_v2", data)
+    return data
 
 
 def _run_analysis() -> dict:
@@ -140,13 +198,10 @@ def index():
 
 @app.route("/api/recommendations", methods=["GET"])
 def get_recommendations():
-    force = request.args.get("refresh", "false").lower() == "true"
-    if force:
-        cache_invalidate("analysis_v2")
-    data = cache_get("analysis_v2")
-    if data is None:
-        data = _run_analysis()
-        cache_set("analysis_v2", data)
+    force = _wants_refresh()
+    if force and not _is_owner():
+        return _owner_required()
+    data = _get_analysis(force)
     return jsonify({
         "ok":             True,
         "recommendations":data["recommendations"],
@@ -161,10 +216,9 @@ def get_recommendations():
 
 
 @app.route("/api/refresh", methods=["POST"])
+@owner_only
 def force_refresh():
-    cache_invalidate("analysis_v2")
-    data = _run_analysis()
-    cache_set("analysis_v2", data)
+    data = _get_analysis(force=True)
     return jsonify({"ok": True, "count": len(data["recommendations"]),
                     "refreshed_at": data["refreshed_at"]})
 
@@ -172,10 +226,7 @@ def force_refresh():
 @app.route("/api/ticker/<ticker>", methods=["GET"])
 def get_ticker(ticker: str):
     ticker = ticker.upper()
-    data   = cache_get("analysis_v2")
-    if data is None:
-        data = _run_analysis()
-        cache_set("analysis_v2", data)
+    data   = _get_analysis()
     match = next((r for r in data["recommendations"] if r["ticker"] == ticker), None)
     if not match:
         return jsonify({"ok": False, "error": f"{ticker} not found."}), 404
@@ -183,6 +234,18 @@ def get_ticker(ticker: str):
 
 
 # ── Portfolio — persistent holdings ──────────────────────────────────────────
+
+TICKER_RE = re.compile(r"[A-Z0-9.\-]{1,10}")
+
+
+def _positive_number(value):
+    """Parse a JSON value as a finite number > 0, or return None."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 and n != float("inf") else None
+
 
 @app.route("/api/portfolio/holdings", methods=["GET"])
 def get_holdings():
@@ -192,6 +255,7 @@ def get_holdings():
 
 
 @app.route("/api/portfolio/holdings", methods=["POST"])
+@owner_only
 def add_holding():
     """
     Add or update a holding.
@@ -199,29 +263,41 @@ def add_holding():
             "buy_date": "2024-01-15", "notes": "Long-term hold" }
     """
     body = request.get_json(silent=True) or {}
-    ticker   = (body.get("ticker") or "").upper().strip()
-    shares   = body.get("shares")
-    avg_cost = body.get("avg_cost")
+    ticker   = str(body.get("ticker") or "").upper().strip()
+    shares   = _positive_number(body.get("shares"))
+    avg_cost = _positive_number(body.get("avg_cost"))
+    buy_date = body.get("buy_date") or None
+    notes    = body.get("notes")
 
     if not ticker:
         return jsonify({"ok": False, "error": "ticker is required"}), 400
-    if shares is None or float(shares) <= 0:
+    if not TICKER_RE.fullmatch(ticker):
+        return jsonify({"ok": False, "error": "ticker must be 1-10 letters, digits, '.' or '-'"}), 400
+    if shares is None:
         return jsonify({"ok": False, "error": "shares must be > 0"}), 400
-    if avg_cost is None or float(avg_cost) <= 0:
+    if avg_cost is None:
         return jsonify({"ok": False, "error": "avg_cost must be > 0"}), 400
+    if buy_date is not None:
+        try:
+            date.fromisoformat(str(buy_date))
+        except ValueError:
+            return jsonify({"ok": False, "error": "buy_date must be YYYY-MM-DD"}), 400
+    if notes is not None and len(str(notes)) > 500:
+        return jsonify({"ok": False, "error": "notes must be 500 characters or fewer"}), 400
 
     row = portfolio_upsert(
         ticker=ticker,
-        shares=float(shares),
-        avg_cost=float(avg_cost),
-        buy_date=body.get("buy_date"),
-        notes=body.get("notes"),
+        shares=shares,
+        avg_cost=avg_cost,
+        buy_date=buy_date,
+        notes=notes,
     )
     logger.info(f"Portfolio: upserted {ticker} x{shares} @ ${avg_cost}")
     return jsonify({"ok": True, "holding": row})
 
 
 @app.route("/api/portfolio/holdings/<ticker>", methods=["DELETE"])
+@owner_only
 def remove_holding(ticker: str):
     """Remove a holding from the portfolio."""
     ticker = ticker.upper()
@@ -246,10 +322,7 @@ def analyze():
             "message": "No holdings saved. Add positions via POST /api/portfolio/holdings"
         })
 
-    data = cache_get("analysis_v2")
-    if data is None:
-        data = _run_analysis()
-        cache_set("analysis_v2", data)
+    data = _get_analysis()
 
     try:
         result = analyze_portfolio(holdings, data.get("recommendations", []))
@@ -268,25 +341,16 @@ def get_market_health():
     Returns overall market health score, trajectory, regime, sector leaders/laggards.
     Cached for 30 minutes — market data doesn't need to refresh every run.
     """
-    force = request.args.get("refresh", "false").lower() == "true"
-    if force:
+    if _wants_refresh():
+        if not _is_owner():
+            return _owner_required()
         cache_invalidate("market_health_v1")
 
-    data = cache_get("market_health_v1")
+    data = cache_get("market_health_v1", 30)  # 30 min regardless of CACHE_TTL_MINUTES
     if data is None:
         try:
             data = fetch_market_health()
-            # Cache for 30 min regardless of CACHE_TTL_MINUTES setting
-            import json
-            from datetime import datetime, timezone, timedelta
-            now = datetime.now(timezone.utc).isoformat()
-            from database.db import get_connection
-            with get_connection() as conn:
-                conn.execute(
-                    """INSERT INTO scrape_cache (cache_key, data, created_at) VALUES (?,?,?)
-                       ON CONFLICT(cache_key) DO UPDATE SET data=excluded.data, created_at=excluded.created_at""",
-                    ("market_health_v1", json.dumps(data), now),
-                )
+            cache_set("market_health_v1", data)
         except Exception as e:
             logger.error(f"Market health fetch failed: {e}")
             return jsonify({"ok": False, "error": str(e)}), 500
@@ -310,4 +374,7 @@ if __name__ == "__main__":
         logger.info(f"Saved holdings: {[h['ticker'] for h in saved]}")
     else:
         logger.info("No holdings saved yet — add them in the Portfolio tab")
-    app.run(host="0.0.0.0", port=config.FLASK_PORT, debug=True)
+    # The Werkzeug debugger can run arbitrary code, so it is opt-in and, when on,
+    # only reachable from this machine. Production runs under gunicorn (Procfile).
+    debug = os.getenv("FLASK_DEBUG") == "1"
+    app.run(host="127.0.0.1" if debug else "0.0.0.0", port=config.FLASK_PORT, debug=debug)

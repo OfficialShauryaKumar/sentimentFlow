@@ -1,9 +1,10 @@
-// Signals view: summary sentence, the sentiment "mood line", and the ticker list.
+// Signals view: summary sentence, the "chatter map" treemap, the ranked
+// mover lists, and the full ticker list.
 
 import { esc, money, price as fmtPrice, signed, pctChange, tone, sentence, meter, splitBar } from './format.js';
 import { openDetail } from './detail.js';
 
-const state = { recs: [], filter: 'ALL', sort: 'score', settled: false };
+const state = { recs: [], filter: 'ALL', sort: 'score', developed: false };
 const el = (id) => document.getElementById(id);
 const st = (r) => r.short_term || {};
 
@@ -22,7 +23,8 @@ const SORTS = {
 export function setSignals(data) {
   state.recs = data.recommendations || [];
   renderSummary(data);
-  renderMood();
+  renderMap();
+  renderMovers();
   renderList();
 }
 
@@ -40,72 +42,114 @@ function renderSummary(d) {
   el('countSignals').textContent = r.length;
 }
 
-/* ── Mood line ───────────────────────────────────────────── */
-function renderMood() {
-  const plot = el('moodPlot');
-  const recs = state.recs;
-  const maxAbs = Math.max(0.2, ...recs.map((r) => Math.abs(r.composite_score || 0)));
-  const domain = Math.ceil(maxAbs * 10) / 10;
-  const maxMentions = Math.max(1, ...recs.map((r) => r.mention_count || 0));
+/* ── Chatter map: area = mentions, colour = sentiment ───── */
 
-  el('moodMin').textContent = signed(-domain, 1);
-  el('moodMax').textContent = signed(domain, 1);
+/** Squarified treemap (Bruls et al.): lays items out as near-square tiles. */
+function squarify(items, box) {
+  const total = items.reduce((s, i) => s + i.value, 0) || 1;
+  const scale = (box.w * box.h) / total;
+  const rest = items.map((i) => ({ ...i, area: i.value * scale }));
+  const out = [];
+  let row = [];
+  let { x, y, w, h } = box;
 
-  plot.innerHTML = recs
-    .map((r) => {
-      const x = Math.max(1.5, Math.min(98.5, 50 + ((r.composite_score || 0) / domain) * 50));
-      const size = 6 + Math.round(Math.sqrt((r.mention_count || 0) / maxMentions) * 12);
-      return `<button class="mark t-${tone(st(r).signal)}" data-ticker="${esc(r.ticker)}" data-x="${x}" data-mentions="${r.mention_count || 0}"
-        style="--x:${state.settled ? x : 50}%;--dot:${size}px"
-        aria-label="${esc(r.ticker)}, score ${signed(r.composite_score, 3)}, ${r.mention_count} mentions">
-        <span class="mark-label">${esc(r.ticker)}</span><span class="mark-stem"></span><span class="mark-dot"></span>
-      </button>`;
-    })
-    .join('');
+  const worst = (r, side) => {
+    const s = r.reduce((a, n) => a + n.area, 0);
+    const max = Math.max(...r.map((n) => n.area));
+    const min = Math.min(...r.map((n) => n.area));
+    return Math.max((side * side * max) / (s * s), (s * s) / (side * side * min));
+  };
+  const place = (r) => {
+    const s = r.reduce((a, n) => a + n.area, 0);
+    if (w >= h) {
+      const cw = s / h;
+      let cy = y;
+      for (const n of r) { const nh = n.area / cw; out.push({ ...n, x, y: cy, w: cw, h: nh }); cy += nh; }
+      x += cw; w -= cw;
+    } else {
+      const rh = s / w;
+      let cx = x;
+      for (const n of r) { const nw = n.area / rh; out.push({ ...n, x: cx, y, w: nw, h: rh }); cx += nw; }
+      y += rh; h -= rh;
+    }
+  };
 
-  layoutLanes();
-  dimFiltered();
-  if (!state.settled) {
-    // One orchestrated moment: tickers drift from neutral to their score.
-    void plot.offsetWidth; // commit the neutral start position so the move transitions
-    plot.querySelectorAll('.mark').forEach((m) => m.style.setProperty('--x', m.dataset.x + '%'));
-    state.settled = true;
+  while (rest.length) {
+    const side = Math.min(w, h);
+    if (!row.length || worst([...row, rest[0]], side) <= worst(row, side)) row.push(rest.shift());
+    else { place(row); row = []; }
   }
+  if (row.length) place(row);
+  return out;
 }
 
-/** Stack labels into lanes so neighbouring tickers never overlap. */
-function layoutLanes() {
-  const plot = el('moodPlot');
-  const width = plot.clientWidth;
-  if (!width) return;
-  const marks = [...plot.querySelectorAll('.mark')].map((m) => {
-    const w = m.querySelector('.mark-label').offsetWidth + 10;
-    const center = (m.dataset.x / 100) * width;
-    return { m, left: center - w / 2, right: center + w / 2 };
-  });
-  // Busiest tickers claim label space first; any that cannot fit keep only their dot.
-  marks.sort((a, b) => b.m.dataset.mentions - a.m.dataset.mentions);
-  const maxLanes = width < 600 ? 9 : 7;
-  const lanes = Array.from({ length: maxLanes }, () => []);
-  let used = 0;
-  for (const item of marks) {
-    const lane = lanes.findIndex((spans) => spans.every(([l, r]) => item.right <= l || item.left >= r));
-    item.m.classList.toggle('no-label', lane === -1);
-    if (lane === -1) { item.m.style.setProperty('--lane', 0); continue; }
-    lanes[lane].push([item.left, item.right]);
-    used = Math.max(used, lane + 1);
-    item.m.style.setProperty('--lane', lane);
+function renderMap() {
+  const map = el('chatterMap');
+  const recs = state.recs;
+  if (!recs.length) { map.innerHTML = ''; return; }
+  const maxMentions = Math.max(1, ...recs.map((r) => r.mention_count || 0));
+  const maxAbs = Math.max(0.05, ...recs.map((r) => Math.abs(r.composite_score || 0)));
+  const items = [...recs]
+    .map((r) => ({ r, value: Math.max(r.mention_count || 0, maxMentions * 0.03) }))
+    .sort((a, b) => b.value - a.value);
+  const box = { x: 0, y: 0, w: map.clientWidth, h: map.clientHeight };
+  if (!box.w || !box.h) return;
+
+  map.innerHTML = squarify(items, box).map(({ r, x, y, w, h }) => {
+    const score = r.composite_score || 0;
+    const strength = Math.min(1, Math.abs(score) / maxAbs);
+    const t = score > 0.005 ? 'buy' : score < -0.005 ? 'sell' : 'flat';
+    // Text size follows tile width so tickers never get clipped.
+    const size = w * h > 22000 && w > 150 ? 'l' : w * h > 7000 && w > 96 ? 'm' : w > 64 && h > 58 ? 'n' : 's';
+    return `<button class="tile t-${t} size-${size}${strength > 0.55 ? ' strong' : ''}" data-ticker="${esc(r.ticker)}"
+      style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;--mix:${Math.round(16 + strength * 72)}%"
+      aria-label="${esc(r.ticker)}: score ${signed(score, 3)}, ${r.mention_count} mentions, short term ${sentence(st(r).signal || 'HOLD')}">
+      <span class="tile-ticker">${esc(r.ticker)}</span>
+      <span class="tile-score">${signed(score, 3)}</span>
+      <span class="tile-meta">${r.mention_count} mentions</span>
+    </button>`;
+  }).join('');
+
+  // One orchestrated moment: on first load the colours develop from grey.
+  if (!state.developed) {
+    map.classList.add('is-undeveloped');
+    void map.offsetWidth;
+    map.classList.remove('is-undeveloped');
+    state.developed = true;
   }
-  const lanesUsed = used;
-  plot.style.setProperty('--lanes', Math.max(1, lanesUsed));
+  dimFiltered();
 }
 
 function dimFiltered() {
   const match = FILTERS[state.filter];
-  el('moodPlot').querySelectorAll('.mark').forEach((m) => {
-    const rec = state.recs.find((r) => r.ticker === m.dataset.ticker);
-    m.classList.toggle('is-dim', !match(rec));
+  el('chatterMap').querySelectorAll('.tile').forEach((tile) => {
+    const rec = state.recs.find((r) => r.ticker === tile.dataset.ticker);
+    tile.classList.toggle('is-dim', !match(rec));
   });
+}
+
+/* ── Movers ──────────────────────────────────────────────── */
+function renderMovers() {
+  const recs = state.recs;
+  const top = (list) => list.slice(0, 5);
+  const byScore = [...recs].sort(SORTS.score);
+  const lists = {
+    moversBull: top(byScore.filter((r) => r.composite_score > 0)),
+    moversBear: top(byScore.filter((r) => r.composite_score < 0).reverse()),
+    moversTalk: top([...recs].sort(SORTS.mentions)),
+  };
+  const maxMentions = Math.max(1, ...recs.map((r) => r.mention_count || 0));
+  for (const [id, list] of Object.entries(lists)) {
+    const talk = id === 'moversTalk';
+    el(id).innerHTML = list.length
+      ? list.map((r) => `<li><button class="mover" data-ticker="${esc(r.ticker)}">
+          <span class="mover-ticker">${esc(r.ticker)}</span>
+          ${talk
+            ? `<span class="mover-bar">${meter((r.mention_count / maxMentions) * 100)}</span><span class="mover-val">${r.mention_count}</span>`
+            : `<span class="mover-sub">${sentence(st(r).signal || 'HOLD')}</span><span class="mover-val t-${tone(r.composite_score > 0 ? 'BUY' : 'SELL')}">${signed(r.composite_score, 3)}</span>`}
+        </button></li>`).join('')
+      : '<li class="mover-empty">None right now.</li>';
+  }
 }
 
 /* ── Ticker list ─────────────────────────────────────────── */
@@ -155,8 +199,7 @@ export function initSignals() {
     const rec = btn && state.recs.find((r) => r.ticker === btn.dataset.ticker);
     if (rec) openDetail(rec);
   };
-  el('signalList').addEventListener('click', open);
-  el('moodPlot').addEventListener('click', open);
+  for (const id of ['signalList', 'chatterMap', 'moversBull', 'moversBear', 'moversTalk']) el(id).addEventListener('click', open);
 
   el('filters').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-filter]');
@@ -170,9 +213,11 @@ export function initSignals() {
     state.sort = e.target.value;
     renderList();
   });
-  let lastWidth = 0;
+
+  // Re-tile when the map's size changes (window resize, phone rotation).
+  let last = '';
   new ResizeObserver(([entry]) => {
-    const w = Math.round(entry.contentRect.width);
-    if (w !== lastWidth) { lastWidth = w; layoutLanes(); }
-  }).observe(el('moodPlot'));
+    const size = `${Math.round(entry.contentRect.width)}x${Math.round(entry.contentRect.height)}`;
+    if (size !== last) { last = size; if (state.recs.length) renderMap(); }
+  }).observe(el('chatterMap'));
 }

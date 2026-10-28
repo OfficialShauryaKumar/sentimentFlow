@@ -19,7 +19,7 @@ vaderSentiment==3.3.2
 # Stock & Market Data (real-time price, fundamentals, history)
 yfinance==0.2.40
 pandas==3.0.2
-numpy>=2.3.3
+numpy==2.5.4
 
 # Google Sheets sync (optional — daily archive auto-pushes to a Sheet)
 gspread==6.1.2

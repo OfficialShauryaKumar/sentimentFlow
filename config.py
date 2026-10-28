@@ -30,6 +30,11 @@ ADMIN_PASSWORD       = os.getenv("ADMIN_PASSWORD", "")
 # minutes, so visitors' page loads can't trigger a new scrape every time.
 PUBLIC_CACHE_MINUTES = int(os.getenv("PUBLIC_CACHE_MINUTES", 30))
 
+# Postgres connection string (e.g. from Neon). When set, portfolio holdings and
+# the daily sentiment history are stored there, so they survive restarts on
+# hosts that wipe local files. Leave blank to keep everything in local SQLite.
+DATABASE_URL         = os.getenv("DATABASE_URL", "").strip()
+
 USE_FINBERT       = os.getenv("USE_FINBERT", "false").lower() == "true"
 MAX_POSTS         = int(os.getenv("MAX_POSTS_PER_SOURCE", 25))
 MIN_TRACTION      = float(os.getenv("MIN_TRACTION_SCORE", 0.05))

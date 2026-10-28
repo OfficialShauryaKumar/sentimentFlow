@@ -17,6 +17,7 @@ import config
 from database import (
     init_db, cache_get, cache_set, cache_invalidate,
     portfolio_get_all, portfolio_upsert, portfolio_get_one, portfolio_delete,
+    history_insert, HISTORY_COLUMNS,
 )
 from scrapers import scrape_reddit, scrape_news
 from analysis import build_recommendations
@@ -30,12 +31,12 @@ logger = logging.getLogger("app")
 # Path where daily sentiment snapshots accumulate. Each row = one (date, ticker)
 # pair. After 60–90 trading days this file is the input for backtest/backtest.py.
 HISTORY_PATH   = os.path.join("data", "sentiment_history.csv")
-HISTORY_HEADER = ["date", "ticker", "sentiment_score", "article_count",
-                  "bullish_pct", "bearish_pct", "engine"]
+HISTORY_HEADER = HISTORY_COLUMNS
 
 
 def _archive_snapshot(recs: list[dict]) -> None:
-    """Append today's per-ticker aggregated sentiment to the history CSV.
+    """Append today's per-ticker aggregated sentiment to the history CSV,
+    and to Postgres when DATABASE_URL is set (the copy that survives restarts).
 
     Deduplicates by (date, ticker) so multiple dashboard calls per day only
     produce one row per ticker per day. Quietly no-ops on errors so a write
@@ -43,9 +44,24 @@ def _archive_snapshot(recs: list[dict]) -> None:
     """
     if not recs:
         return
+    today  = datetime.now(timezone.utc).date().isoformat()
+    engine = "finbert" if config.USE_FINBERT else "vader"
+    today_rows = [[
+        today,
+        r["ticker"],
+        r.get("composite_score", 0.0),
+        r.get("mention_count", 0),
+        r.get("bullish_pct", 0.0),
+        r.get("bearish_pct", 0.0),
+        engine,
+    ] for r in recs]
+
     try:
-        today  = datetime.now(timezone.utc).date().isoformat()
-        engine = "finbert" if config.USE_FINBERT else "vader"
+        history_insert(today_rows)
+    except Exception as e:
+        logger.warning(f"Saving history to Postgres failed (non-fatal): {e}")
+
+    try:
         os.makedirs(os.path.dirname(HISTORY_PATH), exist_ok=True)
 
         # Load keys already written so we don't re-archive today.
@@ -55,21 +71,7 @@ def _archive_snapshot(recs: list[dict]) -> None:
                 for row in csv.DictReader(f):
                     existing.add((row["date"], row["ticker"]))
 
-        new_rows = []
-        for r in recs:
-            key = (today, r["ticker"])
-            if key in existing:
-                continue
-            new_rows.append([
-                today,
-                r["ticker"],
-                r.get("composite_score", 0.0),
-                r.get("mention_count", 0),
-                r.get("bullish_pct", 0.0),
-                r.get("bearish_pct", 0.0),
-                engine,
-            ])
-
+        new_rows = [row for row in today_rows if (row[0], row[1]) not in existing]
         if not new_rows:
             return
 

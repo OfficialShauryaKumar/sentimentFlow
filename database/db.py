@@ -69,10 +69,12 @@ def init_db():
 
 # ─── Scrape cache ─────────────────────────────────────────────────────────────
 
-def cache_get(key: str):
-    if config.CACHE_TTL_MINUTES == 0:
+def cache_get(key: str, ttl_minutes: int = None):
+    if ttl_minutes is None:
+        ttl_minutes = config.CACHE_TTL_MINUTES
+    if ttl_minutes == 0:
         return None   # always-fresh mode
-    ttl    = timedelta(minutes=config.CACHE_TTL_MINUTES)
+    ttl    = timedelta(minutes=ttl_minutes)
     cutoff = (datetime.now(timezone.utc) - ttl).isoformat()
     with get_connection() as conn:
         row = conn.execute(

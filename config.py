@@ -22,6 +22,14 @@ FLASK_PORT        = int(os.getenv("FLASK_PORT", 5000))
 # Set to 30+ to cache between runs (saves API quota)
 CACHE_TTL_MINUTES = int(os.getenv("CACHE_TTL_MINUTES", 0))
 
+# Owner password for actions that change data: saving or deleting holdings and
+# forcing a fresh scrape. Leave blank on your own machine; set it on any public
+# deployment (e.g. in Render's Environment settings).
+ADMIN_PASSWORD       = os.getenv("ADMIN_PASSWORD", "")
+# While a password is set, scraped results are reused for at least this many
+# minutes, so visitors' page loads can't trigger a new scrape every time.
+PUBLIC_CACHE_MINUTES = int(os.getenv("PUBLIC_CACHE_MINUTES", 30))
+
 USE_FINBERT       = os.getenv("USE_FINBERT", "false").lower() == "true"
 MAX_POSTS         = int(os.getenv("MAX_POSTS_PER_SOURCE", 25))
 MIN_TRACTION      = float(os.getenv("MIN_TRACTION_SCORE", 0.05))

@@ -7,7 +7,7 @@
 <meta name="description" content="Stock signals built from Reddit and news sentiment, technicals and fundamentals.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@500..900&family=Red+Hat+Text:wght@400..700&display=swap">
 <link rel="stylesheet" href="/dashboard/styles.css">
 <script type="module" src="/dashboard/js/main.js"></script>
 </head>
@@ -39,20 +39,24 @@
   <p class="callout t-sell" id="error" role="alert" hidden></p>
 
   <!-- Signals -->
-  <section id="view-signals" aria-labelledby="moodTitle">
-    <div class="mood">
-      <div class="mood-head">
-        <h1 id="moodTitle">Crowd sentiment</h1>
-        <p class="summary" id="summary"></p>
-      </div>
-      <div class="mood-plot" id="moodPlot"></div>
-      <div class="mood-axis" aria-hidden="true">
-        <span><span id="moodMin">−1.0</span> more bearish</span>
-        <span>neutral</span>
-        <span>more bullish <span id="moodMax">+1.0</span></span>
-      </div>
+  <section id="view-signals" aria-labelledby="mapTitle">
+    <div class="map-head">
+      <h1 id="mapTitle">Chatter map</h1>
+      <p class="summary" id="summary"></p>
+    </div>
+    <div class="chatter-map" id="chatterMap" aria-label="Tickers sized by mentions and coloured by sentiment"></div>
+    <div class="map-key" aria-hidden="true">
+      <span class="key-scale"><span>Bearish</span><span class="key-ramp"></span><span>Bullish</span></span>
+      <span>Colour is the sentiment score. Size is how often a ticker is mentioned.</span>
     </div>
 
+    <div class="movers">
+      <section class="mover-list"><h2>Most bullish</h2><ol id="moversBull"></ol></section>
+      <section class="mover-list"><h2>Most bearish</h2><ol id="moversBear"></ol></section>
+      <section class="mover-list"><h2>Most discussed</h2><ol id="moversTalk"></ol></section>
+    </div>
+
+    <h2 class="list-title">All tickers</h2>
     <div class="toolbar">
       <div class="segmented" id="filters" role="group" aria-label="Filter by short-term signal">
         <button data-filter="ALL" aria-pressed="true">All</button>

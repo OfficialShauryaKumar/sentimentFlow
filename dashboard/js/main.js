@@ -6,6 +6,7 @@ import { initSignals, setSignals } from './signals.js';
 import { initDetail } from './detail.js';
 import { initPortfolio, loadHoldings } from './portfolio.js';
 import { loadMarketHealth } from './market.js';
+import { loadPaper } from './paper.js';
 import { demoData } from './demo.js';
 
 const el = (id) => document.getElementById(id);
@@ -40,7 +41,7 @@ async function loadSignals(refresh = false) {
   }
 }
 
-const VIEWS = ['signals', 'portfolio', 'market'];
+const VIEWS = ['signals', 'portfolio', 'paper', 'market'];
 function switchView(view) {
   for (const v of VIEWS) {
     el(`view-${v}`).hidden = v !== view;
@@ -48,6 +49,7 @@ function switchView(view) {
   }
   if (view === 'portfolio') loadHoldings();
   if (view === 'market') loadMarketHealth();
+  if (view === 'paper') loadPaper();
 }
 
 el('tabs').addEventListener('click', (e) => {

@@ -30,6 +30,7 @@
   <nav class="tabs" id="tabs" aria-label="Views">
     <button id="tab-signals" data-view="signals" aria-current="page">Signals <span class="count" id="countSignals">0</span></button>
     <button id="tab-portfolio" data-view="portfolio" aria-current="false">Portfolio <span class="count" id="countPortfolio">0</span></button>
+    <button id="tab-paper" data-view="paper" aria-current="false">Paper trading</button>
     <button id="tab-market" data-view="market" aria-current="false">Market health</button>
   </nav>
   <button class="btn btn-primary" id="refreshBtn">Refresh signals</button>
@@ -110,6 +111,29 @@
 
     <div class="results" id="portResults" aria-live="polite">
       <div class="empty-panel"><p class="empty-title">No analysis yet</p><p>Add your holdings on the left and choose Refresh analysis to see what to do with each position.</p></div>
+    </div>
+  </section>
+
+  <!-- Paper trading -->
+  <section id="view-paper" aria-labelledby="paperTitle" hidden>
+    <div class="map-head">
+      <h1 id="paperTitle">Paper trading</h1>
+      <p class="summary">An automatic agent trades a simulated $10,000 account on SentimentFlow's short-term signals, once each weekday after the close. It only buys, and sells on a sell signal, its stop-loss or its take-profit.</p>
+    </div>
+    <p class="status" id="paperStatus" role="status">Loading paper-trading results…</p>
+    <div id="paperContent" hidden>
+      <div id="paperStats"></div>
+      <div class="panel paper-chart"><h2>Account value against the S&amp;P 500</h2><div id="paperChart"></div></div>
+      <div class="mkt-grid">
+        <div class="panel">
+          <h2>Open positions</h2>
+          <table class="data-table">
+            <thead><tr><th scope="col">Ticker</th><th scope="col" class="num">Shares</th><th scope="col" class="num">Bought at</th><th scope="col" class="num">Stop-loss</th><th scope="col" class="num">Take-profit</th></tr></thead>
+            <tbody id="paperPositions"></tbody>
+          </table>
+        </div>
+        <div class="panel"><h2>Recent trades</h2><ol class="trades" id="paperTrades"></ol></div>
+      </div>
     </div>
   </section>
 

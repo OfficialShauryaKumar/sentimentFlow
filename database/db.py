@@ -74,6 +74,44 @@ _PG_SCHEMA = """
     );
 """
 
+# Paper-trading agent tables. Plain types valid in both SQLite and Postgres, so the
+# same DDL runs wherever _durable() points. Money is DOUBLE PRECISION, not REAL
+# (Postgres REAL keeps only ~6 significant digits).
+PAPER_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS paper_account (
+        id          INTEGER PRIMARY KEY,
+        start_value DOUBLE PRECISION NOT NULL,
+        cash        DOUBLE PRECISION NOT NULL,
+        spy_start   DOUBLE PRECISION NOT NULL,
+        start_date  TEXT NOT NULL,
+        last_run    TEXT
+    );
+    CREATE TABLE IF NOT EXISTS paper_positions (
+        ticker      TEXT PRIMARY KEY,
+        shares      DOUBLE PRECISION NOT NULL,
+        avg_cost    DOUBLE PRECISION NOT NULL,
+        stop_loss   DOUBLE PRECISION,
+        take_profit DOUBLE PRECISION,
+        opened_at   TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS paper_trades (
+        created_at  TEXT NOT NULL,
+        ticker      TEXT NOT NULL,
+        action      TEXT NOT NULL,
+        shares      DOUBLE PRECISION NOT NULL,
+        price       DOUBLE PRECISION NOT NULL,
+        pnl         DOUBLE PRECISION,
+        reason      TEXT
+    );
+    CREATE TABLE IF NOT EXISTS paper_daily (
+        date        TEXT PRIMARY KEY,
+        equity      DOUBLE PRECISION NOT NULL,
+        cash        DOUBLE PRECISION NOT NULL,
+        spy_close   DOUBLE PRECISION,
+        benchmark   DOUBLE PRECISION
+    );
+"""
+
 
 def init_db():
     """Create all tables if they don't exist."""
@@ -114,6 +152,8 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_mentions_created ON mentions(created_at);
             CREATE INDEX IF NOT EXISTS idx_holdings_ticker  ON portfolio_holdings(ticker);
         """)
+        if not USE_POSTGRES:
+            conn.executescript(PAPER_SCHEMA)
     logger.info("Database initialised.")
 
     if USE_POSTGRES:
@@ -121,7 +161,7 @@ def init_db():
         # holdings requests will report the error instead.
         try:
             with _durable() as (conn, _):
-                conn.execute(_PG_SCHEMA)
+                conn.execute(_PG_SCHEMA + PAPER_SCHEMA)
             logger.info("Postgres ready for holdings and sentiment history.")
         except Exception as e:
             logger.error(f"Postgres setup failed: {e}")

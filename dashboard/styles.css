@@ -382,6 +382,26 @@ input:focus, select:focus { border-color: var(--focus); outline: none; box-shado
 .sector-bar .pos .tone-bg { border-radius: 0 3px 3px 0; }
 .sector-val { text-align: right; font-weight: 700; }
 
+/* ── Paper trading ─────────────────────────────────────── */
+#paperStats { margin-bottom: 16px; }
+.paper-chart { margin-bottom: 16px; }
+.paper-svg { display: block; width: 100%; height: 240px; overflow: visible; }
+.paper-svg polyline { fill: none; stroke-width: 2.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.line-agent, .dot-agent { stroke: var(--focus); fill: var(--focus); }
+.line-spy, .dot-spy { stroke: var(--flat); fill: var(--flat); stroke-dasharray: 6 5; }
+.paper-svg polyline.line-agent, .paper-svg polyline.line-spy { fill: none; }
+.chart-axis, .chart-key { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; font-size: 13px; color: var(--ink-3); }
+.chart-key { justify-content: flex-start; gap: 20px; }
+.chart-key span::before { content: ''; display: inline-block; width: 18px; height: 3px; margin-right: 8px; vertical-align: middle; border-radius: 2px; }
+.key-agent::before { background: var(--focus); }
+.key-spy::before { background: repeating-linear-gradient(90deg, var(--flat) 0 6px, transparent 6px 10px); }
+.trades { list-style: none; }
+.trade { display: grid; grid-template-columns: 64px 1fr auto; gap: 12px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--rule); }
+.trade:last-child { border-bottom: 0; }
+.trade-action { font-weight: 700; }
+.trade-what .sub { display: block; }
+.trade-when { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+
 /* ── Ticker detail panel ───────────────────────────────── */
 .detail {
   position: fixed; inset: 0 0 0 auto; margin: 0; padding: 0; border: 0; border-left: 1px solid var(--rule);

@@ -1,0 +1,31 @@
+# Runs the paper-trading agent once each weekday after the US market closes.
+# Needs one repository secret: ADMIN_PASSWORD (the same value as on Render).
+# Market holidays are skipped by the server itself.
+name: Paper trade
+
+on:
+  schedule:
+    - cron: "15 21 * * 1-5"   # 21:15 UTC = after the 4 pm ET close in both EDT and EST
+  workflow_dispatch:           # "Run workflow" button for a manual run
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Run today's trading cycle
+        env:
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+        run: |
+          # Render's free tier may be asleep; the first attempt wakes it.
+          for attempt in 1 2 3; do
+            code=$(curl -s -o result.json -w "%{http_code}" --max-time 240 -X POST \
+              -H "Authorization: Bearer $ADMIN_PASSWORD" \
+              https://sentimentflow.onrender.com/api/paper/run) || code=000
+            echo "Attempt $attempt: HTTP $code"
+            cat result.json 2>/dev/null; echo
+            [ "$code" = "200" ] && exit 0
+            [ "$code" = "401" ] && { echo "Wrong or missing ADMIN_PASSWORD secret."; exit 1; }
+            sleep 60
+          done
+          exit 1

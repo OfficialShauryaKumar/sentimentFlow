@@ -22,7 +22,10 @@ from database import (
 from scrapers import scrape_reddit, scrape_news
 from analysis import build_recommendations
 from analysis.market_health import fetch_market_health
+from analysis.market_hours import is_trading_day, now_et
 from analysis.portfolio import analyze_portfolio
+from analysis.price_client import fetch_history
+from paper_trading import get_results, run_cycle
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -358,6 +361,32 @@ def get_market_health():
             return jsonify({"ok": False, "error": str(e)}), 500
 
     return jsonify({"ok": True, "market_health": data})
+
+
+# ── Paper-trading agent ───────────────────────────────────────────────────────
+
+@app.route("/api/paper/run", methods=["POST"])
+@owner_only
+def paper_run():
+    """Trade once for today on fresh signals. Called each weekday after the close
+    by .github/workflows/paper-trade.yml; safe to call twice (it won't trade twice)."""
+    today = now_et()
+    if not is_trading_day(today):
+        return jsonify({"ok": True, "skipped": "Market closed today", "date": today.date().isoformat()})
+    data = _get_analysis(force=True)
+    spy = fetch_history("SPY", days=10)
+    spy_price = float(spy["Close"].iloc[-1]) if spy is not None and not spy.empty else None
+    try:
+        result = run_cycle(data["recommendations"], spy_price, today.date().isoformat())
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 503
+    logger.info(f"Paper trading: {len(result['trades'])} trades, equity ${result['equity']:,.2f}")
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/paper", methods=["GET"])
+def paper_results():
+    return jsonify({"ok": True, **get_results()})
 
 
 @app.route("/api/health", methods=["GET"])

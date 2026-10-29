@@ -45,4 +45,5 @@ export const api = {
   saveHolding: (holding) => request('/api/portfolio/holdings', json('POST', holding), true),
   deleteHolding: (ticker) => request(`/api/portfolio/holdings/${encodeURIComponent(ticker)}`, { method: 'DELETE' }, true),
   analyzePortfolio: () => request('/api/portfolio/analyze'),
+  paper: () => request('/api/paper'),
 };

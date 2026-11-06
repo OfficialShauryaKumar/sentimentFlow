@@ -56,6 +56,7 @@ def run_cycle(recs: list[dict], spy_price: float, today: str) -> dict:
 
         if acct["last_run"] != today:
             # 1. Sells
+            sold = set()  # never buy back the same day: that just churns the position
             for t, p in list(positions.items()):
                 price = prices.get(t)
                 if not price:
@@ -69,12 +70,14 @@ def run_cycle(recs: list[dict], spy_price: float, today: str) -> dict:
                     cash += p["shares"] * price
                     conn.execute(sql("DELETE FROM paper_positions WHERE ticker=?"), (t,))
                     del positions[t]
+                    sold.add(t)
                     trade(t, "SELL", p["shares"], price, reason, pnl=round((price - p["avg_cost"]) * p["shares"], 2))
 
             # 2. Buys, most confident first, while cash lasts
             account_value = _value(cash, positions, prices)
             candidates = sorted((r for r in recs if signal[r["ticker"]].get("signal") in BUYS
-                                 and r["ticker"] not in positions and r["ticker"] in prices),
+                                 and r["ticker"] not in positions and r["ticker"] not in sold
+                                 and r["ticker"] in prices),
                                 key=lambda r: signal[r["ticker"]].get("confidence") or 0, reverse=True)
             for r in candidates:
                 t, st, price = r["ticker"], signal[r["ticker"]], prices[r["ticker"]]

@@ -8,6 +8,9 @@
 timeout = 180
 graceful_timeout = 30
 
-# One worker keeps memory inside free-tier limits. The bind address comes
-# from $PORT, which gunicorn uses automatically when it is set.
+# One worker keeps memory inside free-tier limits; its threads let quick requests
+# (paper results, holdings) answer while a long scrape runs, instead of queueing
+# behind it. The bind address comes from $PORT, which gunicorn uses when set.
 workers = 1
+worker_class = "gthread"
+threads = 4

@@ -62,6 +62,19 @@ def is_trading_day(dt: Optional[datetime] = None) -> bool:
     return dt.weekday() < 5 and not is_holiday(dt)
 
 
+def last_closed_session(dt: Optional[datetime] = None) -> Optional[str]:
+    """Date (YYYY-MM-DD) of the most recent trading session that has closed, or None
+    while the regular session is open. A run after midnight or on a weekend still
+    belongs to the last session, so a late scheduled run is never skipped."""
+    dt = dt or now_et()
+    if is_trading_day(dt) and MARKET_OPEN_TIME <= dt.time() < MARKET_CLOSE_TIME:
+        return None
+    day = dt.date() if is_trading_day(dt) and dt.time() >= MARKET_CLOSE_TIME else dt.date() - timedelta(days=1)
+    while not is_trading_day(datetime.combine(day, time(12))):
+        day -= timedelta(days=1)
+    return day.isoformat()
+
+
 def market_status(dt: Optional[datetime] = None) -> dict:
     """
     Returns full market status dict:

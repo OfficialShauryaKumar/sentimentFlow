@@ -7,6 +7,7 @@ import hmac
 import logging
 import os
 import re
+import threading
 from datetime import date, datetime, timezone
 from functools import wraps
 
@@ -22,7 +23,7 @@ from database import (
 from scrapers import scrape_reddit, scrape_news
 from analysis import build_recommendations
 from analysis.market_health import fetch_market_health
-from analysis.market_hours import is_trading_day, now_et
+from analysis.market_hours import last_closed_session
 from analysis.portfolio import analyze_portfolio
 from analysis.price_client import fetch_history
 from paper_trading import get_results, run_cycle
@@ -161,15 +162,20 @@ def _cache_minutes() -> int:
     return config.CACHE_TTL_MINUTES
 
 
+_analysis_lock = threading.Lock()
+
+
 def _get_analysis(force: bool = False) -> dict:
-    """Latest analysis; re-scrapes when the cache is stale or `force` is set."""
-    if force:
-        cache_invalidate("analysis_v2")
-    data = cache_get("analysis_v2", _cache_minutes())
-    if data is None:
-        data = _run_analysis()
-        cache_set("analysis_v2", data)
-    return data
+    """Latest analysis; re-scrapes when the cache is stale or `force` is set.
+    The lock makes concurrent requests share one scrape instead of each running one."""
+    with _analysis_lock:
+        if force:
+            cache_invalidate("analysis_v2")
+        data = cache_get("analysis_v2", _cache_minutes())
+        if data is None:
+            data = _run_analysis()
+            cache_set("analysis_v2", data)
+        return data
 
 
 def _run_analysis() -> dict:
@@ -368,16 +374,17 @@ def get_market_health():
 @app.route("/api/paper/run", methods=["POST"])
 @owner_only
 def paper_run():
-    """Trade once for today on fresh signals. Called each weekday after the close
-    by .github/workflows/paper-trade.yml; safe to call twice (it won't trade twice)."""
-    today = now_et()
-    if not is_trading_day(today):
-        return jsonify({"ok": True, "skipped": "Market closed today", "date": today.date().isoformat()})
+    """Trade once for the last closed session on fresh signals. Called each weekday
+    after the close by .github/workflows/paper-trade.yml; GitHub often starts it hours
+    late, so a run after midnight still counts for that session. Safe to call twice."""
+    session = last_closed_session()
+    if session is None:
+        return jsonify({"ok": False, "error": "The market is open; the agent trades after the 4 pm ET close"}), 409
     data = _get_analysis(force=True)
     spy = fetch_history("SPY", days=10)
     spy_price = float(spy["Close"].iloc[-1]) if spy is not None and not spy.empty else None
     try:
-        result = run_cycle(data["recommendations"], spy_price, today.date().isoformat())
+        result = run_cycle(data["recommendations"], spy_price, session)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 503
     logger.info(f"Paper trading: {len(result['trades'])} trades, equity ${result['equity']:,.2f}")

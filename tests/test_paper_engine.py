@@ -40,7 +40,24 @@ reasons = {t["ticker"]: (t["reason"], t["pnl"]) for t in r["trades"]}
 assert reasons == {"AAA": ("Stop-loss reached", -110), "CCC": ("Signal turned sell", 100)}, reasons
 assert r["equity"] == 9990 and r["benchmark"] == 10200 and r["positions"] == 0, r
 
+# Day 3: buy DDD; day 4 it hits take-profit while still a BUY: sold, not bought back the same run.
+run_cycle([rec("DDD", "BUY", 10, 500, stop=9, target=12)], spy_price=510, today="2026-11-04")
+r = run_cycle([rec("DDD", "BUY", 12.5, 500, stop=11, target=14)], spy_price=510, today="2026-11-05")
+assert [(t["action"], t["ticker"]) for t in r["trades"]] == [("SELL", "DDD")] and r["positions"] == 0, r
+r = run_cycle([rec("DDD", "BUY", 12.5, 500, stop=11, target=14)], spy_price=510, today="2026-11-06")
+assert [(t["action"], t["ticker"]) for t in r["trades"]] == [("BUY", "DDD")], r  # next day it may buy again
+
 res = get_results()
-assert res["return_pct"] == -0.1 and res["benchmark_pct"] == 2.0, res
-assert res["realized_pnl"] == -10 and res["win_rate"] == 50 and len(res["daily"]) == 2, res
+assert res["benchmark_pct"] == 2.0 and len(res["daily"]) == 5, res
+assert res["realized_pnl"] == 112.5 and res["win_rate"] == 67, res  # AAA -110, CCC +100, DDD 49 sh x +2.50
+# Which session a run belongs to (GitHub's scheduler often starts hours late).
+from datetime import datetime  # noqa: E402
+from analysis.market_hours import ET, last_closed_session  # noqa: E402
+at = lambda s: datetime.fromisoformat(s).replace(tzinfo=ET)
+assert last_closed_session(at("2026-11-06 17:15")) == "2026-11-06"   # Friday after the close
+assert last_closed_session(at("2026-11-06 12:00")) is None           # market open: refuse
+assert last_closed_session(at("2026-11-07 01:30")) == "2026-11-06"   # late Friday run lands Saturday
+assert last_closed_session(at("2026-11-09 08:00")) == "2026-11-06"   # Monday before the open
+assert last_closed_session(at("2026-11-27 18:00")) == "2026-11-27"   # day after Thanksgiving
+assert last_closed_session(at("2026-11-26 18:00")) == "2026-11-25"   # Thanksgiving itself: market shut
 print("paper trading engine: all checks passed")

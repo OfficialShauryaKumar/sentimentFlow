@@ -47,9 +47,16 @@ assert [(t["action"], t["ticker"]) for t in r["trades"]] == [("SELL", "DDD")] an
 r = run_cycle([rec("DDD", "BUY", 12.5, 500, stop=11, target=14)], spy_price=510, today="2026-11-06")
 assert [(t["action"], t["ticker"]) for t in r["trades"]] == [("BUY", "DDD")], r  # next day it may buy again
 
+# Earnings rule: no new position in a ticker reporting soon; others still bought.
+r = run_cycle([rec("EEE", "STRONG BUY", 20, 500, confidence=90), rec("FFF", "BUY", 10, 500)],
+              spy_price=510, today="2026-11-09", reporting_soon={"EEE"})
+assert [t["ticker"] for t in r["trades"]] == ["FFF"] and r["skipped_for_earnings"] == ["EEE"], r
+
 res = get_results()
-assert res["benchmark_pct"] == 2.0 and len(res["daily"]) == 5, res
+assert res["benchmark_pct"] == 2.0 and len(res["daily"]) == 6, res
 assert res["realized_pnl"] == 112.5 and res["win_rate"] == 67, res  # AAA -110, CCC +100, DDD 49 sh x +2.50
+# Tax: all 2026 trades net +112.50, at the default 25% => 28.125 (rounds to 28.12), off the account value.
+assert res["est_tax"] == 28.12 and res["after_tax_equity"] == 10084.38, res
 # Which session a run belongs to (GitHub's scheduler often starts hours late).
 from datetime import datetime  # noqa: E402
 from analysis.market_hours import ET, last_closed_session  # noqa: E402

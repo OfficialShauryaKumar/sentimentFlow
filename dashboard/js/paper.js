@@ -30,12 +30,16 @@ function render(d) {
   el('paperStats').innerHTML = metrics([
     metric('Account value', price(d.equity), { note: `Started at ${price(d.start_value)} on ${esc(d.start_date)}` }),
     metric('Agent return', pct(d.return_pct), { tone: pctTone(d.return_pct), note: `Realized ${signedMoney(d.realized_pnl)}` }),
+    metric('After tax (estimate)', price(d.after_tax_equity), {
+      tone: pctTone(d.after_tax_return_pct),
+      note: `${pct(d.after_tax_return_pct)} after ${d.tax_rate}% tax on short-term gains (${price(d.est_tax)})`,
+    }),
     metric('S&P 500 return', pct(d.benchmark_pct), { tone: pctTone(d.benchmark_pct), note: `Same $10,000 held in SPY: ${d.benchmark ? price(d.benchmark) : '—'}` }),
     metric('Versus the S&P 500', lead == null ? '—' : `${signed(lead, 2)} pts`, {
       tone: pctTone(lead),
       note: d.win_rate == null ? 'No closed trades yet' : `${d.win_rate}% of closed trades won`,
     }),
-  ], 'cols-4');
+  ], 'cols-5');
 
   el('paperChart').innerHTML = chart(d.daily);
 

@@ -118,7 +118,7 @@
   <section id="view-paper" aria-labelledby="paperTitle" hidden>
     <div class="map-head">
       <h1 id="paperTitle">Paper trading</h1>
-      <p class="summary">An automatic agent trades a simulated $10,000 account on SentimentFlow's short-term signals, once each weekday after the close. It only buys, and sells on a sell signal, its stop-loss or its take-profit.</p>
+      <p class="summary">An automatic agent trades a simulated $10,000 account on SentimentFlow's short-term signals, once each weekday after the close. It only buys, and sells on a sell signal, its stop-loss or its take-profit. It skips new buys in companies reporting earnings within the next few days.</p>
     </div>
     <p class="status" id="paperStatus" role="status">Loading paper-trading results…</p>
     <div id="paperContent" hidden>

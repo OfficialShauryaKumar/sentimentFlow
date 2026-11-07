@@ -88,6 +88,8 @@ WEIGHT_NEWS_RECENCY    = 0.3
 # ─── Portfolio / Risk Settings ────────────────────────────────────────────────
 
 PORTFOLIO_SIZE     = float(os.getenv("PORTFOLIO_SIZE", 10000))
+# Paper-trading after-tax estimate: % tax on net short-term realized gains each year.
+PAPER_TAX_RATE     = float(os.getenv("PAPER_TAX_RATE", 25))
 RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", 2.0))
 MAX_POSITION_PCT   = float(os.getenv("MAX_POSITION_PCT", 10.0))
 STOP_LOSS_ATR_MULT = float(os.getenv("STOP_LOSS_ATR_MULT", 2.0))

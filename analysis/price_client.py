@@ -33,6 +33,10 @@ _CACHE_TTL = 1800  # 30 minutes
 _yahoo_blocked_until = 0.0
 _YAHOO_COOLDOWN = 3600
 
+_NASDAQ_HEADERS = {"User-Agent": _UA, "Accept": "application/json, text/plain, */*",
+                   "Accept-Language": "en-US,en;q=0.9",
+                   "Origin": "https://www.nasdaq.com", "Referer": "https://www.nasdaq.com/"}
+
 # Symbols served from FRED when Yahoo is unavailable
 _FRED = {"^VIX": "VIXCLS", "^TNX": "DGS10", "DX-Y.NYB": "DTWEXBGS"}
 
@@ -87,14 +91,11 @@ def _nasdaq(symbol: str) -> Optional[pd.DataFrame]:
     if symbol.startswith("^") or "." in symbol:
         return None
     start = (pd.Timestamp.now() - pd.Timedelta(days=380)).strftime("%Y-%m-%d")
-    headers = {"User-Agent": _UA, "Accept": "application/json, text/plain, */*",
-               "Accept-Language": "en-US,en;q=0.9",
-               "Origin": "https://www.nasdaq.com", "Referer": "https://www.nasdaq.com/"}
     for ac in ("etf", "stocks"):
         try:
             r = requests.get(f"https://api.nasdaq.com/api/quote/{symbol}/historical",
                              params={"assetclass": ac, "fromdate": start, "limit": 400},
-                             headers=headers, timeout=_TIMEOUT)
+                             headers=_NASDAQ_HEADERS, timeout=_TIMEOUT)
             if r.status_code != 200:
                 continue
             rows = ((((r.json() or {}).get("data") or {}).get("tradesTable") or {}).get("rows")) or []
@@ -135,6 +136,24 @@ def _fred(symbol: str) -> Optional[pd.DataFrame]:
     except Exception as e:
         logger.debug(f"FRED failed for {symbol}: {e}")
         return None
+
+
+def reporting_soon(start: str, days: int = 5) -> Optional[set[str]]:
+    """Tickers with an earnings report on any of the `days` calendar days from `start`
+    (YYYY-MM-DD), from Nasdaq's public earnings calendar. None if it can't be reached,
+    so callers can tell "nobody reports" apart from "unknown"."""
+    tickers: set[str] = set()
+    for d in pd.date_range(start, periods=days):
+        try:
+            r = requests.get("https://api.nasdaq.com/api/calendar/earnings",
+                             params={"date": d.strftime("%Y-%m-%d")}, headers=_NASDAQ_HEADERS, timeout=_TIMEOUT)
+            r.raise_for_status()
+            rows = ((r.json() or {}).get("data") or {}).get("rows") or []  # weekends come back empty
+        except Exception as e:
+            logger.warning(f"Nasdaq earnings calendar failed for {d:%Y-%m-%d}: {e}")
+            return None
+        tickers.update(str(x.get("symbol", "")).upper() for x in rows if x.get("symbol"))
+    return tickers
 
 
 def fetch_history(symbol: str, days: int = 120) -> Optional[pd.DataFrame]:

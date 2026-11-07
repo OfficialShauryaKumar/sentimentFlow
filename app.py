@@ -25,7 +25,7 @@ from analysis import build_recommendations
 from analysis.market_health import fetch_market_health
 from analysis.market_hours import last_closed_session
 from analysis.portfolio import analyze_portfolio
-from analysis.price_client import fetch_history
+from analysis.price_client import fetch_history, reporting_soon
 from paper_trading import get_results, run_cycle
 
 logging.basicConfig(level=logging.INFO,
@@ -384,7 +384,10 @@ def paper_run():
     spy = fetch_history("SPY", days=10)
     spy_price = float(spy["Close"].iloc[-1]) if spy is not None and not spy.empty else None
     try:
-        result = run_cycle(data["recommendations"], spy_price, session)
+        soon = reporting_soon(session)  # from the session's own after-close reports onward
+        if soon is None:
+            logger.warning("Earnings calendar unavailable: trading without the earnings rule today")
+        result = run_cycle(data["recommendations"], spy_price, session, reporting_soon=soon or frozenset())
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 503
     logger.info(f"Paper trading: {len(result['trades'])} trades, equity ${result['equity']:,.2f}")

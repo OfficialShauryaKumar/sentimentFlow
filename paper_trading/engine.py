@@ -29,13 +29,16 @@ def _value(cash: float, positions: dict, prices: dict) -> float:
     return cash + sum(p["shares"] * prices.get(t, p["avg_cost"]) for t, p in positions.items())
 
 
-def run_cycle(recs: list[dict], spy_price: float, today: str) -> dict:
+def run_cycle(recs: list[dict], spy_price: float, today: str, reporting_soon=frozenset()) -> dict:
     """Trade once for `today` (YYYY-MM-DD) and record the day's value. Safe to re-run:
-    a second run on the same day only refreshes the snapshot, it never trades twice."""
+    a second run on the same day only refreshes the snapshot, it never trades twice.
+    No new position is opened in a ticker in `reporting_soon` (earnings due in the next
+    few days), since prices jump unpredictably on the report."""
     prices = {r["ticker"]: float(r["price"]) for r in recs if r.get("price")}
     signal = {r["ticker"]: r.get("short_term") or {} for r in recs}
     now = f"{today}T{datetime.now(timezone.utc):%H:%M:%S}Z"  # trading day first, so the log reads by market day
     trades = []
+    skipped_for_earnings = []
 
     with _durable() as (conn, sql):
         acct = conn.execute(sql("SELECT * FROM paper_account WHERE id=1")).fetchone()
@@ -81,6 +84,9 @@ def run_cycle(recs: list[dict], spy_price: float, today: str) -> dict:
                                 key=lambda r: signal[r["ticker"]].get("confidence") or 0, reverse=True)
             for r in candidates:
                 t, st, price = r["ticker"], signal[r["ticker"]], prices[r["ticker"]]
+                if t in reporting_soon:
+                    skipped_for_earnings.append(t)
+                    continue
                 sized = (st.get("position") or {}).get("dollar_amount") or 0
                 budget = min(sized * account_value / config.PORTFOLIO_SIZE, account_value * MAX_POSITION_PCT, cash)
                 shares = math.floor(budget / price)
@@ -105,6 +111,7 @@ def run_cycle(recs: list[dict], spy_price: float, today: str) -> dict:
                      (today, equity, round(cash, 2), spy_price, benchmark))
 
     return {"date": today, "traded": acct["last_run"] != today, "trades": trades,
+            "skipped_for_earnings": skipped_for_earnings,
             "equity": equity, "benchmark": benchmark, "cash": round(cash, 2), "positions": len(positions)}
 
 
@@ -117,10 +124,19 @@ def get_results() -> dict:
         daily = [dict(r) for r in conn.execute(sql("SELECT * FROM paper_daily ORDER BY date")).fetchall()]
         positions = [dict(r) for r in conn.execute(sql("SELECT * FROM paper_positions ORDER BY opened_at")).fetchall()]
         trades = [dict(r) for r in conn.execute(sql("SELECT * FROM paper_trades ORDER BY created_at DESC LIMIT 100")).fetchall()]
-        closed = [dict(r) for r in conn.execute(sql("SELECT pnl FROM paper_trades WHERE action='SELL'")).fetchall()]
+        closed = [dict(r) for r in conn.execute(sql("SELECT created_at, pnl FROM paper_trades WHERE action='SELL'")).fetchall()]
     acct = dict(acct)
     last = daily[-1] if daily else {"equity": acct["start_value"], "benchmark": acct["start_value"]}
     pct = lambda v: round((v / acct["start_value"] - 1) * 100, 2) if v else None
+
+    # Estimated tax: every trade is held under a year, so gains are short-term. Net each
+    # calendar year's realized P&L (losses offset gains that year) and tax only a net gain.
+    # shortcut: flat rate, no loss carry-forward between years; it's an estimate, not tax advice.
+    yearly = {}
+    for t in closed:
+        yearly[t["created_at"][:4]] = yearly.get(t["created_at"][:4], 0) + (t["pnl"] or 0)
+    est_tax = round(sum(max(0.0, g) for g in yearly.values()) * config.PAPER_TAX_RATE / 100, 2)
+    after_tax = round(last["equity"] - est_tax, 2)
     return {
         "started": True,
         "start_date": acct["start_date"],
@@ -131,6 +147,10 @@ def get_results() -> dict:
         "return_pct": pct(last["equity"]),
         "benchmark_pct": pct(last["benchmark"]),
         "realized_pnl": round(sum(t["pnl"] or 0 for t in closed), 2),
+        "tax_rate": config.PAPER_TAX_RATE,
+        "est_tax": est_tax,
+        "after_tax_equity": after_tax,
+        "after_tax_return_pct": pct(after_tax),
         "win_rate": round(100 * sum(1 for t in closed if (t["pnl"] or 0) > 0) / len(closed)) if closed else None,
         "positions": positions,
         "trades": trades,

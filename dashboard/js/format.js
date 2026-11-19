@@ -10,7 +10,7 @@ export const plus = (n) => (n >= 0 ? '+' : '');
 export const signed = (n, digits) => plus(n) + (digits == null ? n : n.toFixed(digits));
 export const money = (n) => '$' + Number(n || 0).toLocaleString();
 export const price = (n) => '$' + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-export const signedMoney = (n) => (n < 0 ? '−' : '+') + money(Math.abs(n || 0));
+export const signedMoney = (n) => (n < 0 ? '−' : '+') + price(Math.abs(n || 0));
 export const pctChange = (n) => `${plus(n)}${n}%`;
 
 /** Map an engine signal (STRONG BUY … STRONG SELL) to a colour tone. */

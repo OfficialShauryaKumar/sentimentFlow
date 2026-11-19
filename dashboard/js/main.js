@@ -16,10 +16,15 @@ const LOADING_STEPS = [
   'Computing RSI, MACD and Bollinger bands…', 'Pulling analyst ratings…', 'Building predictions…',
 ];
 
+// The loading screen only covers the Signals view; other tabs don't need the scrape.
+let signalsLoading = false;
+let currentView = 'signals';
+const showLoader = () => { el('loader').hidden = !(signalsLoading && currentView === 'signals'); };
+
 async function loadSignals(refresh = false) {
-  const loader = el('loader');
   const refreshBtn = el('refreshBtn');
-  loader.hidden = false;
+  signalsLoading = true;
+  showLoader();
   refreshBtn.disabled = true;
   el('error').hidden = true;
   let step = 0;
@@ -36,7 +41,8 @@ async function loadSignals(refresh = false) {
     setSignals(demoData);
   } finally {
     clearInterval(ticker);
-    loader.hidden = true;
+    signalsLoading = false;
+    showLoader();
     refreshBtn.disabled = false;
   }
 }
@@ -47,6 +53,9 @@ function switchView(view) {
     el(`view-${v}`).hidden = v !== view;
     el(`tab-${v}`).setAttribute('aria-current', v === view ? 'page' : 'false');
   }
+  currentView = view;
+  showLoader();
+  history.replaceState(null, '', `#${view}`); // so a link or bookmark opens this tab
   if (view === 'portfolio') loadHoldings();
   if (view === 'market') loadMarketHealth();
   if (view === 'paper') loadPaper();
@@ -62,5 +71,6 @@ startClock();
 initSignals();
 initDetail();
 initPortfolio();
+if (VIEWS.includes(location.hash.slice(1))) switchView(location.hash.slice(1)); // e.g. /#paper
 loadSignals();
 loadHoldings();
